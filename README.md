@@ -10,3 +10,9 @@ Express API using Sequelize with MySQL.
 
 The API listens on port `4000` by default. JSON and URL-encoded request bodies
 are limited to `100mb`. CORS allows requests from any origin.
+
+## API documentation
+
+With the API running, open `http://localhost:4000/api-docs` for the interactive
+Swagger UI, or `http://localhost:4000/api-docs.json` to retrieve the OpenAPI
+specification. The specification documents the current API status endpoint.
