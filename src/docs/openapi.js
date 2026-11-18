@@ -219,6 +219,36 @@ const openapiSpec = {
         responses: { 204: { description: "Store deleted." }, 404: { description: "Store not found." } },
       },
     },
+    "/api/activity-logs": {
+      get: {
+        operationId: "listActivityLogs",
+        summary: "List activity logs",
+        tags: ["Activity logs"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{
+          name: "limit",
+          in: "query",
+          required: false,
+          schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+        }],
+        responses: {
+          200: {
+            description: "Newest activity logs.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    activityLogs: { type: "array", items: { $ref: "#/components/schemas/ActivityLog" } },
+                  },
+                },
+              },
+            },
+          },
+          403: { description: "Administrator access is required." },
+        },
+      },
+    },
     "/": {
       get: {
         operationId: "getApiStatus",
@@ -249,6 +279,22 @@ const openapiSpec = {
       bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
     },
     schemas: {
+      ActivityLog: {
+        type: "object",
+        required: ["id", "action", "entityType", "createdAt"],
+        properties: {
+          id: { type: "integer" },
+          userId: { type: "integer", nullable: true },
+          username: { type: "string", nullable: true },
+          action: { type: "string", example: "create" },
+          entityType: { type: "string", example: "store" },
+          entityId: { type: "string", nullable: true },
+          details: { type: "object", nullable: true, additionalProperties: true },
+          ipAddress: { type: "string", nullable: true },
+          userAgent: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
       UserRole: {
         type: "string",
         enum: ["admin", "spg", "collecting", "gudang", "owner"],

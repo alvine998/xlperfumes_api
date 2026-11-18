@@ -26,6 +26,13 @@ support listing, creating, updating, activating/deactivating, and deleting
 users. Roles are `admin`, `spg`, `collecting`, `gudang`, and `owner`. User
 responses never include password hashes.
 
+## Activity logs
+
+Authentication attempts and administrator changes to users and stores are
+stored in the `activity_logs` table. `GET /api/activity-logs` requires an
+authenticated administrator and returns up to 500 newest entries; pass
+`?limit=100` to select a smaller page size. Password values are never logged.
+
 ## API documentation
 
 With the API running, open `http://localhost:4000/api-docs` for the interactive
