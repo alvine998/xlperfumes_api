@@ -7,7 +7,7 @@ Express API using Sequelize with MySQL.
 1. Install dependencies with `npm install`.
 2. Copy `.env.example` to `.env` and set your MySQL connection values.
 3. Generate a random secret (for example, `openssl rand -base64 48`), set it as `JWT_SECRET`, and set `WEB_ORIGIN` to the web app's origin.
-4. Create the first administrator by setting `ADMIN_USERNAME` and `ADMIN_PASSWORD`, then run `npm run bootstrap:admin`. This command only works while the users table is empty.
+4. Create the first administrator by setting `ADMIN_USERNAME` and `ADMIN_PASSWORD`, then run `npm run seed`. The seed command is safe to run repeatedly and also creates or maintains the configured user as an active administrator. For the original one-time empty-table bootstrap behavior, use `npm run bootstrap:admin`.
 5. Start the API with `npm start` (or `npm run dev` for Node's watch mode).
 
 The API listens on port `4000` by default. JSON and URL-encoded request bodies

@@ -180,6 +180,45 @@ const openapiSpec = {
         },
       },
     },
+    "/api/stores": {
+      get: {
+        operationId: "listStores",
+        summary: "List stores",
+        tags: ["Stores"],
+        security: [{ bearerAuth: [] }],
+        responses: { 200: { description: "Stores ordered by creation date." }, 403: { description: "Administrator access is required." } },
+      },
+      post: {
+        operationId: "createStore",
+        summary: "Create a store",
+        tags: ["Stores"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/StoreInput" } } },
+        },
+        responses: { 201: { description: "Store created." }, 400: { description: "Invalid store data." } },
+      },
+    },
+    "/api/stores/{id}": {
+      patch: {
+        operationId: "updateStore",
+        summary: "Update a store",
+        tags: ["Stores"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/StoreInput" } } } },
+        responses: { 200: { description: "Store updated." }, 404: { description: "Store not found." } },
+      },
+      delete: {
+        operationId: "deleteStore",
+        summary: "Delete a store",
+        tags: ["Stores"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: { 204: { description: "Store deleted." }, 404: { description: "Store not found." } },
+      },
+    },
     "/": {
       get: {
         operationId: "getApiStatus",
@@ -225,11 +264,23 @@ const openapiSpec = {
           createdAt: { type: "string", format: "date-time" },
         },
       },
+      StoreInput: {
+        type: "object",
+        required: ["name", "branch", "address", "latitude", "longitude"],
+        properties: {
+          name: { type: "string", maxLength: 120, example: "XL Perfumes Blok M" },
+          branch: { type: "string", maxLength: 100, example: "Jakarta Selatan" },
+          address: { type: "string", example: "Jl. Melawai, Jakarta Selatan" },
+          latitude: { type: "number", minimum: -90, maximum: 90 },
+          longitude: { type: "number", minimum: -180, maximum: 180 },
+        },
+      },
     },
   },
   tags: [
     { name: "Authentication", description: "Login and account session" },
     { name: "Users", description: "Administrator user management" },
+    { name: "Stores", description: "Store locations and records" },
     { name: "Status", description: "API availability" },
   ],
 };

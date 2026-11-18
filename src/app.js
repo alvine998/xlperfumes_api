@@ -3,6 +3,7 @@ const express = require("express");
 const swaggerUi = require("swagger-ui-express");
 const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/users");
+const storeRoutes = require("./routes/stores");
 const openapiSpec = require("./docs/openapi");
 
 const app = express();
@@ -16,6 +17,7 @@ app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/stores", storeRoutes);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openapiSpec));
 app.get("/api-docs.json", (_req, res) => {
   res.json(openapiSpec);
