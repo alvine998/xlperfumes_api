@@ -269,18 +269,76 @@ const openapiSpec = {
         tags: ["Store stock"],
         security: [{ bearerAuth: [] }],
         responses: {
-          200: { description: "Store stock records." },
+          200: {
+            description: "Stock totals for each store and product variant, including the last updater.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["stocks"],
+                  properties: {
+                    stocks: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/StoreVariantStock" },
+                    },
+                  },
+                },
+              },
+            },
+          },
           403: { description: "The account does not have inventory access." },
         },
       },
     },
-    "/api/store-stock/{storeId}": {
+    "/api/variants": {
+      get: {
+        operationId: "listVariants",
+        summary: "List product variants",
+        tags: ["Variants"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Product variant records." },
+          403: { description: "The account does not have inventory access." },
+        },
+      },
+      post: {
+        operationId: "createVariant",
+        summary: "Create a product variant",
+        tags: ["Variants"],
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/VariantInput" } } } },
+        responses: { 201: { description: "Product variant created." }, 400: { description: "Invalid variant." } },
+      },
+    },
+    "/api/variants/{id}": {
+      patch: {
+        operationId: "updateVariant",
+        summary: "Update a product variant",
+        tags: ["Variants"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/VariantInput" } } } },
+        responses: { 200: { description: "Product variant updated." }, 400: { description: "Invalid variant." }, 404: { description: "Variant not found." } },
+      },
+      delete: {
+        operationId: "deleteVariant",
+        summary: "Delete a product variant",
+        tags: ["Variants"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: { 204: { description: "Product variant deleted." }, 404: { description: "Variant not found." } },
+      },
+    },
+    "/api/store-stock/{storeId}/{variantId}": {
       patch: {
         operationId: "adjustStoreStock",
-        summary: "Increase or decrease store stock",
+        summary: "Increase or decrease stock for a store variant",
         tags: ["Store stock"],
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "storeId", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [
+          { name: "storeId", in: "path", required: true, schema: { type: "integer" } },
+          { name: "variantId", in: "path", required: true, schema: { type: "integer" } },
+        ],
         requestBody: {
           required: true,
           content: {
@@ -296,7 +354,24 @@ const openapiSpec = {
             },
           },
         },
-        responses: { 200: { description: "Store stock updated." }, 400: { description: "Invalid adjustment." }, 403: { description: "The account does not have inventory access." }, 404: { description: "Store not found." } },
+        responses: {
+          200: {
+            description: "Updated stock and the authenticated updater.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    stock: { $ref: "#/components/schemas/StoreVariantStock" },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Invalid adjustment." },
+          403: { description: "The account does not have inventory access." },
+          404: { description: "Store or variant not found." },
+        },
       },
     },
     "/api/roles": {
@@ -464,6 +539,53 @@ const openapiSpec = {
           longitude: { type: "number", minimum: -180, maximum: 180 },
         },
       },
+      VariantInput: {
+        type: "object",
+        required: ["name", "quantity", "unit", "unitPrice"],
+        properties: {
+          name: { type: "string", maxLength: 150, example: "Eau de Parfum 50 ml" },
+          quantity: { type: "integer", minimum: 0, example: 24 },
+          unit: { type: "string", maxLength: 40, example: "pcs" },
+          unitPrice: { type: "number", minimum: 0, example: 125000 },
+        },
+      },
+      StoreStockUpdater: {
+        type: "object",
+        nullable: true,
+        properties: {
+          id: { type: "integer" },
+          username: { type: "string" },
+        },
+      },
+      StoreVariantStock: {
+        type: "object",
+        required: [
+          "id",
+          "storeId",
+          "name",
+          "branch",
+          "variantId",
+          "variantName",
+          "variantQuantity",
+          "variantUnit",
+          "totalStock",
+          "lastUpdate",
+          "updatedBy",
+        ],
+        properties: {
+          id: { type: "string", example: "1:2" },
+          storeId: { type: "integer" },
+          name: { type: "string" },
+          branch: { type: "string" },
+          variantId: { type: "integer" },
+          variantName: { type: "string" },
+          variantQuantity: { type: "integer" },
+          variantUnit: { type: "string" },
+          totalStock: { type: "integer", minimum: 0 },
+          lastUpdate: { type: "string", format: "date-time", nullable: true },
+          updatedBy: { $ref: "#/components/schemas/StoreStockUpdater" },
+        },
+      },
     },
   },
   tags: [
@@ -471,6 +593,8 @@ const openapiSpec = {
     { name: "Users", description: "Administrator user management" },
     { name: "Roles", description: "Role based access control by feature" },
     { name: "Stores", description: "Store locations and records" },
+    { name: "Store stock", description: "Variant stock levels per store" },
+    { name: "Variants", description: "Product variant catalog" },
     { name: "Status", description: "API availability" },
   ],
 };

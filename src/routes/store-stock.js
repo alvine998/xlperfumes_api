@@ -8,6 +8,6 @@ const router = express.Router();
 router.use(authenticate, requirePermission("inventory"));
 
 router.get("/", asyncHandler(listStoreStock));
-router.patch("/:storeId", asyncHandler(adjustStoreStock));
+router.patch("/:storeId/:variantId", asyncHandler(adjustStoreStock));
 
 module.exports = router;
