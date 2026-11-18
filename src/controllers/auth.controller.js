@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/user");
 const logActivity = require("../middleware/activity-log");
 const { COOKIE_NAME, getJwtSecret } = require("../middleware/authenticate");
+const { getPermissionsForRole } = require("../middleware/permissions");
 
 const TOKEN_LIFETIME_MS = 8 * 60 * 60 * 1000;
 
@@ -67,8 +68,10 @@ async function logout(req, res) {
   res.status(204).end();
 }
 
-function getCurrentUser(req, res) {
-  res.json({ user: publicUser(req.user) });
+async function getCurrentUser(req, res) {
+  const user = publicUser(req.user);
+  const permissions = await getPermissionsForRole(req.user.role);
+  res.json({ user: { ...user, permissions } });
 }
 
 module.exports = { login, logout, getCurrentUser };

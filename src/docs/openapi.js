@@ -262,6 +262,93 @@ const openapiSpec = {
         responses: { 204: { description: "Store deleted." }, 404: { description: "Store not found." } },
       },
     },
+    "/api/store-stock": {
+      get: {
+        operationId: "listStoreStock",
+        summary: "List stock for every store",
+        tags: ["Store stock"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Store stock records." },
+          403: { description: "The account does not have inventory access." },
+        },
+      },
+    },
+    "/api/store-stock/{storeId}": {
+      patch: {
+        operationId: "adjustStoreStock",
+        summary: "Increase or decrease store stock",
+        tags: ["Store stock"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "storeId", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["direction", "quantity"],
+                properties: {
+                  direction: { type: "string", enum: ["increase", "decrease"] },
+                  quantity: { type: "integer", minimum: 1 },
+                },
+              },
+            },
+          },
+        },
+        responses: { 200: { description: "Store stock updated." }, 400: { description: "Invalid adjustment." }, 403: { description: "The account does not have inventory access." }, 404: { description: "Store not found." } },
+      },
+    },
+    "/api/roles": {
+      get: {
+        operationId: "listRoles",
+        summary: "List roles and feature access",
+        tags: ["Roles"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Roles with their feature permissions." },
+          403: { description: "The account does not have role management access." },
+        },
+      },
+    },
+    "/api/roles/permissions": {
+      put: {
+        operationId: "updateRolePermissions",
+        summary: "Update feature access for every role",
+        tags: ["Roles"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["permissions"],
+                properties: {
+                  permissions: {
+                    type: "object",
+                    required: ["owner", "admin", "gudang", "collecting", "spg"],
+                    properties: {
+                      owner: { $ref: "#/components/schemas/FeaturePermissions" },
+                      admin: { $ref: "#/components/schemas/FeaturePermissions" },
+                      gudang: { $ref: "#/components/schemas/FeaturePermissions" },
+                      collecting: { $ref: "#/components/schemas/FeaturePermissions" },
+                      spg: { $ref: "#/components/schemas/FeaturePermissions" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Feature permissions saved." },
+          400: { description: "The permission matrix is invalid." },
+          403: { description: "The account does not have role management access." },
+          409: { description: "At least one active user must keep access to role management." },
+        },
+      },
+    },
     "/api/activity-logs": {
       get: {
         operationId: "listActivityLogs",
@@ -322,6 +409,18 @@ const openapiSpec = {
       bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
     },
     schemas: {
+      FeaturePermissions: {
+        type: "object",
+        required: ["overview", "inventory", "sales", "stores", "users", "activity"],
+        properties: {
+          overview: { type: "boolean" },
+          inventory: { type: "boolean" },
+          sales: { type: "boolean" },
+          stores: { type: "boolean" },
+          users: { type: "boolean" },
+          activity: { type: "boolean" },
+        },
+      },
       ActivityLog: {
         type: "object",
         required: ["id", "action", "entityType", "createdAt"],
@@ -349,6 +448,7 @@ const openapiSpec = {
           id: { type: "integer", example: 1 },
           username: { type: "string", example: "admin" },
           role: { $ref: "#/components/schemas/UserRole" },
+          permissions: { $ref: "#/components/schemas/FeaturePermissions" },
           isActive: { type: "boolean", example: true },
           createdAt: { type: "string", format: "date-time" },
         },
@@ -369,6 +469,7 @@ const openapiSpec = {
   tags: [
     { name: "Authentication", description: "Login and account session" },
     { name: "Users", description: "Administrator user management" },
+    { name: "Roles", description: "Role based access control by feature" },
     { name: "Stores", description: "Store locations and records" },
     { name: "Status", description: "API availability" },
   ],

@@ -56,6 +56,17 @@ async function ensureDefaultRoles() {
   }
 }
 
+async function hasActiveRoleManager(overrides = {}) {
+  const [activeUsers, savedRoles] = await Promise.all([
+    User.findAll({ attributes: ["role"], where: { isActive: true } }),
+    Role.findAll(),
+  ]);
+  const permissionsByRole = { ...DEFAULT_PERMISSIONS };
+  for (const role of savedRoles) permissionsByRole[role.slug] = role.permissions;
+  Object.assign(permissionsByRole, overrides);
+  return activeUsers.some((user) => permissionsByRole[user.role]?.users);
+}
+
 async function listRoles(_req, res) {
   await ensureDefaultRoles();
   const roles = await Role.findAll({ order: [["id", "ASC"]] });
@@ -106,9 +117,16 @@ async function updateRole(req, res) {
   if (body.slug !== undefined && !ROLE_SLUGS.includes(body.slug)) {
     return res.status(400).json({ error: "Slug is invalid." });
   }
+  if (body.slug !== undefined && body.slug !== role.slug) {
+    return res.status(409).json({ error: "A role key cannot be changed after creation." });
+  }
   if (body.permissions !== undefined && (body.permissions === null || typeof body.permissions !== "object" ||
       FEATURES.some((feature) => typeof body.permissions[feature] !== "boolean"))) {
     return res.status(400).json({ error: "Permissions are invalid." });
+  }
+
+  if (body.permissions !== undefined && !await hasActiveRoleManager({ [role.slug]: body.permissions })) {
+    return res.status(409).json({ error: "At least one active user must keep access to role management." });
   }
 
   if (body.name !== undefined) role.name = body.name.trim();
@@ -150,13 +168,19 @@ async function updatePermissions(req, res) {
     return res.status(400).json({ error: "The permissions matrix is invalid." });
   }
 
-  await ensureDefaultRoles();
-  for (const slug of ROLE_SLUGS) {
-    const role = await Role.findOne({ where: { slug } });
-    if (!role) continue;
-    role.permissions = permissions[slug];
-    await role.save();
+  if (!await hasActiveRoleManager(permissions)) {
+    return res.status(409).json({ error: "At least one active user must keep access to role management." });
   }
+
+  await ensureDefaultRoles();
+  await Role.sequelize.transaction(async (transaction) => {
+    for (const slug of ROLE_SLUGS) {
+      const role = await Role.findOne({ where: { slug }, transaction });
+      if (!role) continue;
+      role.permissions = permissions[slug];
+      await role.save({ transaction });
+    }
+  });
   await logActivity(req, {
     action: "update",
     entityType: "role_permissions",
