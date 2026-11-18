@@ -7,6 +7,49 @@ const openapiSpec = {
   },
   servers: [{ url: "/", description: "Current API server" }],
   paths: {
+    "/api/telegram/webhook": {
+      post: {
+        operationId: "handleTelegramWebhook",
+        summary: "Handle a Telegram bot update",
+        tags: ["Telegram"],
+        parameters: [{
+          in: "header",
+          name: "X-Telegram-Bot-Api-Secret-Token",
+          required: true,
+          schema: { type: "string" },
+          description: "Secret configured when registering the Telegram webhook.",
+        }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  message: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string" },
+                      chat: {
+                        type: "object",
+                        properties: { id: { type: "integer", format: "int64" } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "The update was processed or ignored." },
+          401: { description: "The webhook secret is missing or invalid." },
+          429: { description: "The sender and IP have exceeded the request limit." },
+          502: { description: "OpenAI or Telegram could not process the reply." },
+          503: { description: "The integration is not configured." },
+        },
+      },
+    },
     "/api/auth/login": {
       post: {
         operationId: "login",

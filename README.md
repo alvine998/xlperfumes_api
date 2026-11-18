@@ -33,6 +33,30 @@ stored in the `activity_logs` table. `GET /api/activity-logs` requires an
 authenticated administrator and returns up to 500 newest entries; pass
 `?limit=100` to select a smaller page size. Password values are never logged.
 
+## Telegram AI bot
+
+Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `OPENAI_API_KEY` in
+the API environment. The webhook uses `OPENAI_MODEL` (default
+`gpt-4o-mini`) and an optional `OPENAI_SYSTEM_PROMPT`. It sends each incoming
+text message to OpenAI and sends the reply back to the same Telegram chat.
+Non-text updates and messages sent by bots are acknowledged without a reply.
+The webhook does not require user authentication; it validates Telegram's
+`X-Telegram-Bot-Api-Secret-Token` header. Generate the webhook secret with
+`openssl rand -hex 32` and use the same value when registering the webhook.
+Requests are limited to 50 per rolling minute for each Telegram sender and
+client IP pair; excess requests receive HTTP 429 and a `Retry-After` header.
+The limiter is in-memory and applies per API process.
+
+After deploying the API at a publicly reachable HTTPS URL, register the
+webhook with Telegram:
+
+```sh
+curl --fail-with-body \
+  "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  --data-urlencode "url=https://your-api.example.com/api/telegram/webhook" \
+  --data-urlencode "secret_token=${TELEGRAM_WEBHOOK_SECRET}"
+```
+
 ## API documentation
 
 With the API running, open `http://localhost:4000/api-docs` for the interactive

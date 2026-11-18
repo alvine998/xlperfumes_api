@@ -1,11 +1,11 @@
 const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
-const { authenticate, requireAdmin } = require("../middleware/authenticate");
+const { authenticate, requirePermission } = require("../middleware/permissions");
 const { listActivityLogs } = require("../controllers/activity-logs.controller");
 
 const router = express.Router();
 
-router.use(authenticate, requireAdmin);
+router.use(authenticate, requirePermission("activity"));
 
 router.get("/", asyncHandler(listActivityLogs));
 

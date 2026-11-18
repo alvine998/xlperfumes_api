@@ -1,11 +1,11 @@
 const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
-const { authenticate, requireAdmin } = require("../middleware/authenticate");
+const { authenticate, requirePermission } = require("../middleware/permissions");
 const { listUsers, createUser, updateUser, deleteUser } = require("../controllers/users.controller");
 
 const router = express.Router();
 
-router.use(authenticate, requireAdmin);
+router.use(authenticate, requirePermission("users"));
 
 router.get("/", asyncHandler(listUsers));
 router.post("/", asyncHandler(createUser));
