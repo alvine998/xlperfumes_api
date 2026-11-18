@@ -223,6 +223,52 @@ const openapiSpec = {
         },
       },
     },
+    "/api/branches": {
+      get: {
+        operationId: "listBranches",
+        summary: "List branches",
+        tags: ["Branches"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Branches with creator names and linked store counts." },
+          403: { description: "Access to store management is required." },
+        },
+      },
+      post: {
+        operationId: "createBranch",
+        summary: "Create a branch",
+        tags: ["Branches"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/BranchInput" } } },
+        },
+        responses: { 201: { description: "Branch created." }, 400: { description: "Invalid branch data." } },
+      },
+    },
+    "/api/branches/{id}": {
+      patch: {
+        operationId: "updateBranch",
+        summary: "Update a branch",
+        tags: ["Branches"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/BranchInput" } } } },
+        responses: { 200: { description: "Branch updated." }, 404: { description: "Branch not found." } },
+      },
+      delete: {
+        operationId: "deleteBranch",
+        summary: "Delete an unused branch",
+        tags: ["Branches"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: {
+          204: { description: "Branch deleted." },
+          404: { description: "Branch not found." },
+          409: { description: "Branch is still referenced by related data." },
+        },
+      },
+    },
     "/api/stores": {
       get: {
         operationId: "listStores",
@@ -528,12 +574,35 @@ const openapiSpec = {
           createdAt: { type: "string", format: "date-time" },
         },
       },
+      Branch: {
+        type: "object",
+        required: ["id", "name", "city", "address", "createdBy", "createdAt", "storeCount"],
+        properties: {
+          id: { type: "integer", example: 1 },
+          name: { type: "string", example: "Jakarta Selatan" },
+          city: { type: "string", example: "Jakarta" },
+          address: { type: "string", example: "Jl. Melawai, Jakarta Selatan" },
+          createdBy: { type: "string", nullable: true, example: "admin" },
+          createdAt: { type: "string", format: "date-time" },
+          storeCount: { type: "integer", minimum: 0 },
+        },
+      },
+      BranchInput: {
+        type: "object",
+        required: ["name", "city", "address"],
+        properties: {
+          name: { type: "string", maxLength: 120 },
+          city: { type: "string", maxLength: 100 },
+          address: { type: "string" },
+        },
+      },
       StoreInput: {
         type: "object",
         required: ["name", "branch", "address", "latitude", "longitude"],
         properties: {
           name: { type: "string", maxLength: 120, example: "XL Perfumes Blok M" },
           branch: { type: "string", maxLength: 100, example: "Jakarta Selatan" },
+          branchId: { type: "integer", nullable: true, example: 1 },
           address: { type: "string", example: "Jl. Melawai, Jakarta Selatan" },
           latitude: { type: "number", minimum: -90, maximum: 90 },
           longitude: { type: "number", minimum: -180, maximum: 180 },
@@ -591,6 +660,7 @@ const openapiSpec = {
   tags: [
     { name: "Authentication", description: "Login and account session" },
     { name: "Users", description: "Administrator user management" },
+    { name: "Branches", description: "Branch location management" },
     { name: "Roles", description: "Role based access control by feature" },
     { name: "Stores", description: "Store locations and records" },
     { name: "Store stock", description: "Variant stock levels per store" },
