@@ -1,21 +1,32 @@
 const Store = require("../models/store");
 const Branch = require("../models/branch");
 const Zone = require("../models/zone");
+const StoreZona = require("../models/store-zona");
 const logActivity = require("../middleware/activity-log");
 
-function publicStore(store) {
+function publicStore(store, assignment = null) {
   return {
     id: store.id,
     name: store.name,
     branch: store.branchRecord?.name ?? store.branch,
     branchId: store.branchId ?? null,
-    zonaId: store.zonaId ?? null,
-    zona: store.zonaRecord?.name ?? null,
+    zonaId: assignment?.zonaId ?? null,
+    zona: assignment?.zone?.name ?? null,
+    routeIndex: assignment?.routeIndex ?? null,
     address: store.address,
     latitude: Number(store.latitude),
     longitude: Number(store.longitude),
     createdAt: store.createdAt,
   };
+}
+
+async function assignmentsByStoreId(storeIds) {
+  if (storeIds.length === 0) return new Map();
+  const assignments = await StoreZona.findAll({
+    where: { storeId: storeIds },
+    include: [{ model: Zone, as: "zone", attributes: ["id", "name"] }],
+  });
+  return new Map(assignments.map((assignment) => [assignment.storeId, assignment]));
 }
 
 function validStoreDetails(body, branchName) {
@@ -30,15 +41,25 @@ async function listStores(_req, res) {
   const stores = await Store.findAll({
     include: [
       { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
-      { model: Zone, as: "zonaRecord", attributes: ["id", "name"] },
     ],
     order: [["createdAt", "DESC"]],
   });
-  res.json({ stores: stores.map(publicStore) });
+  const assignments = await assignmentsByStoreId(stores.map(({ id }) => id));
+  res.json({
+    stores: stores.map((store) =>
+      publicStore(store, assignments.get(store.id) ?? null),
+    ),
+  });
 }
 
 async function createStore(req, res) {
   const body = req.body ?? {};
+  const allowedFields = ["name", "branch", "branchId", "address", "latitude", "longitude"];
+  if (Object.keys(body).some((field) => !allowedFields.includes(field))) {
+    return res.status(400).json({
+      error: "Penempatan toko ke zona hanya dapat diatur dari detail zona.",
+    });
+  }
   let branch = null;
   if (body.branchId !== undefined && body.branchId !== null) {
     const branchId = Number(body.branchId);
@@ -53,29 +74,15 @@ async function createStore(req, res) {
     return res.status(400).json({ error: "Nama toko, cabang, alamat, dan pin lokasi yang valid wajib diisi." });
   }
 
-  let zona = null;
-  if (body.zonaId !== undefined && body.zonaId !== null && body.zonaId !== "") {
-    const zonaId = Number(body.zonaId);
-    if (!Number.isInteger(zonaId) || zonaId < 1) {
-      return res.status(400).json({ error: "Zona tidak valid." });
-    }
-    zona = await Zone.findByPk(zonaId);
-    if (!zona) return res.status(400).json({ error: "Zona tidak ditemukan." });
-    if (!branch || zona.branchId !== branch.id) {
-      return res.status(400).json({ error: "Zona harus sesuai dengan cabang toko." });
-    }
-  }
-
   const store = await Store.create({
     name: body.name.trim(),
     branch: branchName.trim(),
     branchId: branch?.id ?? null,
-    zonaId: zona?.id ?? null,
     address: body.address.trim(),
     latitude: Number(body.latitude),
     longitude: Number(body.longitude),
   });
-  store.zonaRecord = zona;
+  store.branchRecord = branch;
   await logActivity(req, {
     action: "create",
     entityType: "store",
@@ -86,11 +93,15 @@ async function createStore(req, res) {
 }
 
 async function updateStore(req, res) {
-  const store = await Store.findByPk(req.params.id);
+  const store = await Store.findByPk(req.params.id, {
+    include: [
+      { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
+    ],
+  });
   if (!store) return res.status(404).json({ error: "Toko tidak ditemukan." });
 
   const body = req.body ?? {};
-  const allowedFields = ["name", "branch", "branchId", "zonaId", "address", "latitude", "longitude"];
+  const allowedFields = ["name", "branch", "branchId", "address", "latitude", "longitude"];
   if (Object.keys(body).some((field) => !allowedFields.includes(field))) {
     return res.status(400).json({ error: "Data toko atau pin lokasi tidak valid." });
   }
@@ -110,35 +121,30 @@ async function updateStore(req, res) {
     return res.status(400).json({ error: "Data toko atau pin lokasi tidak valid." });
   }
 
-  let zona = null;
-  if (updated.zonaId !== undefined && updated.zonaId !== null && updated.zonaId !== "") {
-    const zonaId = Number(updated.zonaId);
-    if (!Number.isInteger(zonaId) || zonaId < 1) {
-      return res.status(400).json({ error: "Zona tidak valid." });
-    }
-    zona = await Zone.findByPk(zonaId);
-    if (!zona) return res.status(400).json({ error: "Zona tidak ditemukan." });
-    if (!branch || zona.branchId !== branch.id) {
-      return res.status(400).json({ error: "Zona harus sesuai dengan cabang toko." });
-    }
+  const assignment = await StoreZona.findByPk(store.id, {
+    include: [{ model: Zone, as: "zone", attributes: ["id", "branchId"] }],
+  });
+  if (assignment && assignment.zone.branchId !== branch?.id) {
+    return res.status(409).json({
+      error: "Keluarkan toko dari zona sebelum mengubah cabangnya.",
+    });
   }
-
   store.name = updated.name.trim();
   store.branch = branchName.trim();
   store.branchId = branch?.id ?? null;
-  store.zonaId = zona?.id ?? null;
   store.address = updated.address.trim();
   store.latitude = Number(updated.latitude);
   store.longitude = Number(updated.longitude);
   await store.save();
-  store.zonaRecord = zona;
+  store.branchRecord = branch;
+  const assignments = await assignmentsByStoreId([store.id]);
   await logActivity(req, {
     action: "update",
     entityType: "store",
     entityId: store.id,
     details: { changedFields: Object.keys(body), name: store.name, branch: store.branch },
   });
-  res.json({ store: publicStore(store) });
+  res.json({ store: publicStore(store, assignments.get(store.id) ?? null) });
 }
 
 async function deleteStore(req, res) {

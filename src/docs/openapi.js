@@ -295,7 +295,51 @@ const openapiSpec = {
         },
       },
     },
+    "/api/zones/collectors": {
+      get: {
+        operationId: "listZoneCollectors",
+        summary: "List active collecting users for zone assignments",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Active collecting users eligible for zone membership or PIC." },
+          403: { description: "Access to store management is required." },
+        },
+      },
+    },
     "/api/zones/{id}": {
+      get: {
+        operationId: "getZoneDetail",
+        summary: "Get a zone and its stores",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: {
+          200: {
+            description: "Zone details, its stores in route order, and unassigned stores from the same branch.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["zone", "stores", "availableStores"],
+                  properties: {
+                    zone: { $ref: "#/components/schemas/Zone" },
+                    stores: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/ZoneStore" },
+                    },
+                    availableStores: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/ZoneStoreCandidate" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          404: { description: "Zone not found." },
+        },
+      },
       patch: {
         operationId: "updateZone",
         summary: "Update an unused zone",
@@ -322,6 +366,141 @@ const openapiSpec = {
         },
       },
     },
+    "/api/zones/{id}/stores": {
+      post: {
+        operationId: "addStoresToZone",
+        summary: "Add multiple unassigned same-branch stores to a zone",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["storeIds"],
+                properties: {
+                  storeIds: {
+                    type: "array",
+                    minItems: 1,
+                    uniqueItems: true,
+                    items: { type: "integer", minimum: 1 },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: "Stores added to the zone." },
+          400: { description: "Invalid stores or a store is not in the zone's branch." },
+          404: { description: "Zone or a store was not found." },
+          409: { description: "One or more stores are already assigned to a zone." },
+        },
+      },
+    },
+    "/api/zones/{id}/stores/order": {
+      put: {
+        operationId: "updateZoneStoreOrder",
+        summary: "Update the ordered stores in a zone route",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["storeIds"],
+                properties: {
+                  storeIds: { type: "array", items: { type: "integer" } },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Zone store order updated." },
+          400: { description: "Invalid or outdated store order." },
+          404: { description: "Zone not found." },
+        },
+      },
+    },
+    "/api/zones/{id}/stores/{storeId}": {
+      post: {
+        operationId: "addStoreToZone",
+        summary: "Add an unassigned same-branch store to a zone",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          { name: "storeId", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        responses: {
+          201: { description: "Store added to the zone." },
+          400: { description: "Store is not in the zone's branch." },
+          404: { description: "Zone or store not found." },
+          409: { description: "Store is already assigned to a zone." },
+        },
+      },
+      delete: {
+        operationId: "removeStoreFromZone",
+        summary: "Remove a store from a zone without deleting the store",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          { name: "storeId", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        responses: {
+          204: { description: "Store removed from the zone." },
+          404: { description: "Zone, store, or assignment not found." },
+        },
+      },
+    },
+    "/api/zones/{id}/users": {
+      get: {
+        operationId: "getZoneUsers",
+        summary: "List users assigned to a zone",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: {
+          200: { description: "Users assigned to the zone." },
+          404: { description: "Zone not found." },
+        },
+      },
+      put: {
+        operationId: "updateZoneUsers",
+        summary: "Replace a zone's collecting user assignments",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["userIds"],
+                properties: {
+                  userIds: { type: "array", items: { type: "integer" } },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Zone user assignments updated." },
+          400: { description: "Invalid user assignment." },
+          404: { description: "Zone not found." },
+        },
+      },
+    },
     "/api/stores": {
       get: {
         operationId: "listStores",
@@ -339,7 +518,10 @@ const openapiSpec = {
           required: true,
           content: { "application/json": { schema: { $ref: "#/components/schemas/StoreInput" } } },
         },
-        responses: { 201: { description: "Store created." }, 400: { description: "Invalid store data." } },
+        responses: {
+          201: { description: "Store created." },
+          400: { description: "Invalid store data or unsupported zone assignment." },
+        },
       },
     },
     "/api/stores/{id}": {
@@ -350,7 +532,11 @@ const openapiSpec = {
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/StoreInput" } } } },
-        responses: { 200: { description: "Store updated." }, 404: { description: "Store not found." } },
+        responses: {
+          200: { description: "Store updated." },
+          404: { description: "Store not found." },
+          409: { description: "Remove the store from its zone before changing its branch." },
+        },
       },
       delete: {
         operationId: "deleteStore",
@@ -651,15 +837,29 @@ const openapiSpec = {
       },
       Zone: {
         type: "object",
-        required: ["id", "name", "branchId", "branch", "createdBy", "createdAt", "storeCount"],
+        required: [
+          "id",
+          "name",
+          "branchId",
+          "branch",
+          "userPicId",
+          "picUsername",
+          "createdBy",
+          "createdAt",
+          "storeCount",
+          "memberCount",
+        ],
         properties: {
           id: { type: "integer", example: 1 },
           name: { type: "string", example: "Zona Jakarta Selatan" },
           branchId: { type: "integer", example: 1 },
           branch: { type: "string", example: "Jakarta Selatan" },
+          userPicId: { type: "integer", nullable: true },
+          picUsername: { type: "string", nullable: true },
           createdBy: { type: "string", nullable: true, example: "admin" },
           createdAt: { type: "string", format: "date-time" },
           storeCount: { type: "integer", minimum: 0 },
+          memberCount: { type: "integer", minimum: 0 },
         },
       },
       ZoneInput: {
@@ -668,6 +868,59 @@ const openapiSpec = {
         properties: {
           name: { type: "string", maxLength: 120 },
           branchId: { type: "integer", example: 1 },
+          userPicId: { type: "integer", nullable: true },
+        },
+      },
+      ZoneStore: {
+        type: "object",
+        required: [
+          "id",
+          "name",
+          "branch",
+          "address",
+          "latitude",
+          "longitude",
+          "routeIndex",
+          "createdAt",
+        ],
+        properties: {
+          id: { type: "integer" },
+          name: { type: "string" },
+          branch: { type: "string" },
+          address: { type: "string" },
+          latitude: { type: "number", minimum: -90, maximum: 90 },
+          longitude: { type: "number", minimum: -180, maximum: 180 },
+          routeIndex: { type: "integer", minimum: 1 },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      ZoneStoreCandidate: {
+        type: "object",
+        required: [
+          "id",
+          "name",
+          "branch",
+          "branchId",
+          "zonaId",
+          "zona",
+          "routeIndex",
+          "address",
+          "latitude",
+          "longitude",
+          "createdAt",
+        ],
+        properties: {
+          id: { type: "integer" },
+          name: { type: "string" },
+          branch: { type: "string" },
+          branchId: { type: "integer" },
+          zonaId: { type: "integer", nullable: true },
+          zona: { type: "string", nullable: true },
+          routeIndex: { type: "integer", nullable: true },
+          address: { type: "string" },
+          latitude: { type: "number", minimum: -90, maximum: 90 },
+          longitude: { type: "number", minimum: -180, maximum: 180 },
+          createdAt: { type: "string", format: "date-time" },
         },
       },
       StoreInput: {
@@ -677,7 +930,6 @@ const openapiSpec = {
           name: { type: "string", maxLength: 120, example: "XL Perfumes Blok M" },
           branch: { type: "string", maxLength: 100, example: "Jakarta Selatan" },
           branchId: { type: "integer", nullable: true, example: 1 },
-          zonaId: { type: "integer", nullable: true, example: 1 },
           address: { type: "string", example: "Jl. Melawai, Jakarta Selatan" },
           latitude: { type: "number", minimum: -90, maximum: 90 },
           longitude: { type: "number", minimum: -180, maximum: 180 },

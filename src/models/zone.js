@@ -2,6 +2,7 @@ const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
 const Branch = require("./branch");
 const User = require("./user");
+const UserZona = require("./user-zona");
 
 const Zone = sequelize.define("Zone", {
   id: {
@@ -22,6 +23,16 @@ const Zone = sequelize.define("Zone", {
     },
     onDelete: "RESTRICT",
   },
+  userPicId: {
+    type: DataTypes.INTEGER.UNSIGNED,
+    allowNull: true,
+    field: "user_pic_id",
+    references: {
+      model: "users",
+      key: "id",
+    },
+    onDelete: "SET NULL",
+  },
   createdBy: {
     type: DataTypes.INTEGER.UNSIGNED,
     allowNull: true,
@@ -38,5 +49,12 @@ const Zone = sequelize.define("Zone", {
 
 Zone.belongsTo(Branch, { as: "branchRecord", foreignKey: "branchId" });
 Zone.belongsTo(User, { as: "creator", foreignKey: "createdBy" });
+Zone.belongsTo(User, { as: "pic", foreignKey: "userPicId" });
+Zone.belongsToMany(User, {
+  as: "members",
+  through: UserZona,
+  foreignKey: "zonaId",
+  otherKey: "userId",
+});
 
 module.exports = Zone;

@@ -2,6 +2,7 @@ const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
 const Branch = require("./branch");
 const Zone = require("./zone");
+const StoreZona = require("./store-zona");
 
 const Store = sequelize.define("Store", {
   id: {
@@ -26,15 +27,6 @@ const Store = sequelize.define("Store", {
     },
     onDelete: "RESTRICT",
   },
-  zonaId: {
-    type: DataTypes.INTEGER.UNSIGNED,
-    allowNull: true,
-    references: {
-      model: "zonas",
-      key: "id",
-    },
-    onDelete: "RESTRICT",
-  },
   address: {
     type: DataTypes.TEXT,
     allowNull: false,
@@ -53,6 +45,19 @@ const Store = sequelize.define("Store", {
 });
 
 Store.belongsTo(Branch, { as: "branchRecord", foreignKey: "branchId" });
-Store.belongsTo(Zone, { as: "zonaRecord", foreignKey: "zonaId" });
+Store.belongsToMany(Zone, {
+  as: "zonas",
+  through: StoreZona,
+  foreignKey: "storeId",
+  otherKey: "zonaId",
+});
+Zone.belongsToMany(Store, {
+  as: "stores",
+  through: StoreZona,
+  foreignKey: "zonaId",
+  otherKey: "storeId",
+});
+StoreZona.belongsTo(Store, { as: "store", foreignKey: "storeId" });
+StoreZona.belongsTo(Zone, { as: "zone", foreignKey: "zonaId" });
 
 module.exports = Store;

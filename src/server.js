@@ -4,6 +4,7 @@ const { DataTypes } = require("sequelize");
 const app = require("./app");
 const sequelize = require("./config/database");
 const { getJwtSecret } = require("./middleware/authenticate");
+const { runMigrations } = require("./migrations");
 
 const port = Number(process.env.PORT) || 4000;
 
@@ -24,30 +25,13 @@ async function ensureStoreBranchId() {
   });
 }
 
-async function ensureStoreZonaId() {
-  const queryInterface = sequelize.getQueryInterface();
-  const columns = await queryInterface.describeTable("stores");
-  if (columns.zonaId) return;
-
-  await queryInterface.addColumn("stores", "zonaId", {
-    type: DataTypes.INTEGER.UNSIGNED,
-    allowNull: true,
-    references: {
-      model: "zonas",
-      key: "id",
-    },
-    onUpdate: "CASCADE",
-    onDelete: "RESTRICT",
-  });
-}
-
 async function startServer() {
   try {
     getJwtSecret();
     await sequelize.authenticate();
     await sequelize.sync();
     await ensureStoreBranchId();
-    await ensureStoreZonaId();
+    await runMigrations();
     console.log("MySQL connection established successfully.");
 
     app.listen(port, () => {
