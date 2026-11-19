@@ -24,12 +24,30 @@ async function ensureStoreBranchId() {
   });
 }
 
+async function ensureStoreZonaId() {
+  const queryInterface = sequelize.getQueryInterface();
+  const columns = await queryInterface.describeTable("stores");
+  if (columns.zonaId) return;
+
+  await queryInterface.addColumn("stores", "zonaId", {
+    type: DataTypes.INTEGER.UNSIGNED,
+    allowNull: true,
+    references: {
+      model: "zonas",
+      key: "id",
+    },
+    onUpdate: "CASCADE",
+    onDelete: "RESTRICT",
+  });
+}
+
 async function startServer() {
   try {
     getJwtSecret();
     await sequelize.authenticate();
     await sequelize.sync();
     await ensureStoreBranchId();
+    await ensureStoreZonaId();
     console.log("MySQL connection established successfully.");
 
     app.listen(port, () => {
