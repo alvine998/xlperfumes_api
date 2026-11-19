@@ -66,6 +66,58 @@ async function listProducts(req, res) {
   res.json({ products: products.map(publicProduct) });
 }
 
+async function moveWarehouseProducts(req, res) {
+  const direction = req.body?.direction;
+  const barcodes = req.body?.barcodes;
+  if ((direction !== "in" && direction !== "out") || !Array.isArray(barcodes) || barcodes.length === 0 ||
+    barcodes.length > 500 || barcodes.some((barcode) => typeof barcode !== "string" || !barcode.trim() || barcode.length > 120)) {
+    return res.status(400).json({ error: "Arah pergerakan dan daftar kode barcode yang valid wajib diisi." });
+  }
+  const normalized = barcodes.map((barcode) => barcode.trim());
+  if (new Set(normalized).size !== normalized.length) {
+    return res.status(400).json({ error: "Kode barcode yang sama tidak boleh dimasukkan lebih dari sekali." });
+  }
+  const fromStatus = direction === "in" ? "pending" : "di_gudang";
+  const toStatus = direction === "in" ? "di_gudang" : "di_toko";
+  const result = await sequelize.transaction(async (transaction) => {
+    const products = await Product.findAll({
+      where: { barcode: normalized },
+      include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    const byBarcode = new Map(products.map((product) => [product.barcode, product]));
+    const missing = normalized.filter((barcode) => !byBarcode.has(barcode));
+    if (missing.length) return { invalid: `Kode QR tidak ditemukan: ${missing.join(", ")}` };
+    const unavailable = products.filter((product) => product.status !== fromStatus);
+    if (unavailable.length) {
+      return { invalid: `Status barang tidak sesuai: ${unavailable.map((product) => `${product.barcode} (${product.status})`).join(", ")}` };
+    }
+    for (const product of products) {
+      product.status = toStatus;
+      await product.save({ transaction });
+    }
+    return { products: normalized.map((barcode) => byBarcode.get(barcode)) };
+  });
+  if (result.invalid) return res.status(400).json({ error: result.invalid });
+  for (const product of result.products) {
+    await logActivity(req, {
+      action: "update",
+      entityType: "product",
+      entityId: product.id,
+      details: {
+        barcode: product.barcode,
+        name: product.name,
+        direction,
+        fromStatus,
+        toStatus,
+        branch: product.branchRecord?.name ?? "—",
+      },
+    });
+  }
+  res.json({ products: result.products.map(publicProduct) });
+}
+
 async function getProduct(req, res) {
   const product = await Product.findByPk(req.params.id, {
     include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
@@ -105,4 +157,4 @@ async function deleteProduct(req, res) {
   res.status(204).end();
 }
 
-module.exports = { deleteProduct, getProduct, listProductBranches, listProducts };
+module.exports = { deleteProduct, getProduct, listProductBranches, listProducts, moveWarehouseProducts };

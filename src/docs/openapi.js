@@ -575,6 +575,46 @@ const openapiSpec = {
         },
       },
     },
+    "/api/store-stock/{storeId}/receive": {
+      post: {
+        operationId: "receiveStoreStock",
+        summary: "Transfer warehouse products into a store stock total",
+        tags: ["Store stock"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "storeId", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["items"],
+                properties: {
+                  items: {
+                    type: "array",
+                    minItems: 1,
+                    items: {
+                      type: "object",
+                      required: ["variantId", "quantity"],
+                      properties: {
+                        variantId: { type: "integer" },
+                        quantity: { type: "integer", minimum: 1 },
+                        notes: { type: "string", maxLength: 500 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Warehouse products were transferred and store stock totals updated." },
+          400: { description: "Invalid quantities or insufficient matching products in the warehouse." },
+          404: { description: "Store or variant not found." },
+        },
+      },
+    },
     "/api/products": {
       get: {
         operationId: "listProducts",
@@ -601,6 +641,30 @@ const openapiSpec = {
         tags: ["Products"],
         security: [{ bearerAuth: [] }],
         responses: { 200: { description: "Branch identifiers and names." }, 403: { description: "The account does not have inventory access." } },
+      },
+    },
+    "/api/products/warehouse-movement": {
+      post: {
+        operationId: "moveWarehouseProducts",
+        summary: "Move scanned products into or out of the warehouse",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["direction", "barcodes"],
+            properties: {
+              direction: { type: "string", enum: ["in", "out"] },
+              barcodes: { type: "array", minItems: 1, maxItems: 500, items: { type: "string", maxLength: 120 } },
+            },
+          } } },
+        },
+        responses: {
+          200: { description: "The scanned product status transitions were applied." },
+          400: { description: "A barcode was not found or is not in the expected source status." },
+          403: { description: "The account does not have inventory access." },
+        },
       },
     },
     "/api/products/{id}": {
