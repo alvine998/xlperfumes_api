@@ -1,6 +1,6 @@
 {
   "name": "xlperfumes-api",
-  "version": "0.9.0",
+  "version": "0.120.0",
   "private": true,
   "description": "Express API for XL Perfumes",
   "main": "src/server.js",

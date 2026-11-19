@@ -8,6 +8,7 @@ const migrations = [
   ["202611190004-create-user-zona", require("./202611190004-create-user-zona")],
   ["202611190005-add-route-index-to-stores", require("./202611190005-add-route-index-to-stores")],
   ["202611190006-create-store-zonas", require("./202611190006-create-store-zonas")],
+  ["202611190007-create-products", require("./202611190007-create-products")],
 ];
 
 const queryInterface = sequelize.getQueryInterface();

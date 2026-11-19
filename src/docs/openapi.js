@@ -575,6 +575,52 @@ const openapiSpec = {
         },
       },
     },
+    "/api/products": {
+      get: {
+        operationId: "listProducts",
+        summary: "List products with optional filters",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string", enum: ["pending", "di_gudang", "di_toko", "di_spg", "di_collecting", "terjual", "rusak"] } },
+          { name: "search", in: "query", description: "Search product name or barcode.", schema: { type: "string" } },
+          { name: "branchId", in: "query", schema: { type: "integer" } },
+          { name: "startDate", in: "query", schema: { type: "string", format: "date" } },
+          { name: "endDate", in: "query", schema: { type: "string", format: "date" } },
+        ],
+        responses: {
+          200: { description: "Products sorted by most recently updated." },
+          403: { description: "The account does not have inventory access." },
+        },
+      },
+    },
+    "/api/products/branches": {
+      get: {
+        operationId: "listProductBranches",
+        summary: "List branches available for product filters",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        responses: { 200: { description: "Branch identifiers and names." }, 403: { description: "The account does not have inventory access." } },
+      },
+    },
+    "/api/products/{id}": {
+      get: {
+        operationId: "getProduct",
+        summary: "Get product details",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: { 200: { description: "Product details and activity history matched by barcode." }, 404: { description: "Product not found." } },
+      },
+      delete: {
+        operationId: "deleteProduct",
+        summary: "Delete a product",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: { 204: { description: "Product deleted." }, 404: { description: "Product not found." } },
+      },
+    },
     "/api/variants": {
       get: {
         operationId: "listVariants",

@@ -38,6 +38,16 @@ stored in the `activity_logs` table. `GET /api/activity-logs` requires an
 authenticated administrator and returns up to 500 newest entries; pass
 `?limit=100` to select a smaller page size. Password values are never logged.
 
+## Products
+
+`GET /api/products` lists barcode-tracked products and accepts optional `status`,
+`search` (name or barcode), `branchId`, `startDate`, and `endDate` filters.
+`GET /api/products/:id` returns product details and activity history matched by
+the exact barcode in activity log details or entity IDs. `DELETE /api/products/:id`
+removes it and records the action in the activity log. Products use one of the
+statuses `pending`, `di_gudang`, `di_toko`, `di_spg`, `di_collecting`,
+`terjual`, or `rusak` and belong to a branch.
+
 ## Zone details and store routes
 
 The authenticated `GET /api/zones/:id` endpoint returns zone details and its
