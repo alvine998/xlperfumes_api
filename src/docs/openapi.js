@@ -507,7 +507,14 @@ const openapiSpec = {
         summary: "List stores",
         tags: ["Stores"],
         security: [{ bearerAuth: [] }],
-        responses: { 200: { description: "Stores ordered by creation date." }, 403: { description: "Administrator access is required." } },
+        parameters: [
+          { name: "page", in: "query", schema: { type: "integer", minimum: 1 } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } },
+          { name: "start_date", in: "query", description: "Inclusive creation date in Asia/Jakarta (YYYY-MM-DD).", schema: { type: "string", format: "date" } },
+          { name: "end_date", in: "query", description: "Inclusive creation date in Asia/Jakarta (YYYY-MM-DD).", schema: { type: "string", format: "date" } },
+          { name: "store_name", in: "query", schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "Stores ordered by creation date, with pagination metadata when filters or pagination parameters are supplied." }, 400: { description: "Invalid date filter." }, 403: { description: "The user does not have store access." } },
       },
       post: {
         operationId: "createStore",

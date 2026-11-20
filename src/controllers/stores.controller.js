@@ -3,6 +3,7 @@ const Branch = require("../models/branch");
 const Zone = require("../models/zone");
 const StoreZona = require("../models/store-zona");
 const logActivity = require("../middleware/activity-log");
+const { Op } = require("sequelize");
 
 function publicStore(store, assignment = null) {
   return {
@@ -37,19 +38,54 @@ function validStoreDetails(body, branchName) {
     Number.isFinite(Number(body.longitude)) && Number(body.longitude) >= -180 && Number(body.longitude) <= 180;
 }
 
-async function listStores(_req, res) {
-  const stores = await Store.findAll({
+function validJakartaDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+async function listStores(req, res) {
+  const { page, limit, start_date: startDate, end_date: endDate, store_name: storeName } = req.query;
+  const paginated = page !== undefined || limit !== undefined || startDate !== undefined ||
+    endDate !== undefined || storeName !== undefined;
+  const where = {};
+  if (typeof storeName === "string" && storeName.trim()) where.name = { [Op.like]: `%${storeName.trim()}%` };
+  if (startDate || endDate) {
+    const createdAt = {};
+    if (startDate) {
+      const start = new Date(`${startDate}T00:00:00.000+07:00`);
+      if (!validJakartaDate(startDate)) return res.status(400).json({ error: "Tanggal awal tidak valid." });
+      createdAt[Op.gte] = start;
+    }
+    if (endDate) {
+      const end = new Date(`${endDate}T00:00:00.000+07:00`);
+      if (!validJakartaDate(endDate)) return res.status(400).json({ error: "Tanggal akhir tidak valid." });
+      if (startDate && startDate > endDate) return res.status(400).json({ error: "Rentang tanggal tidak valid." });
+      end.setUTCDate(end.getUTCDate() + 1);
+      createdAt[Op.lt] = end;
+    }
+    where.createdAt = createdAt;
+  }
+  const currentPage = Math.max(1, Number.parseInt(page, 10) || 1);
+  const pageLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 50));
+  const options = {
+    where,
     include: [
       { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
     ],
     order: [["createdAt", "DESC"]],
-  });
+  };
+  const { rows: stores, count } = paginated
+    ? await Store.findAndCountAll({ ...options, limit: pageLimit, offset: (currentPage - 1) * pageLimit })
+    : { rows: await Store.findAll(options), count: null };
   const assignments = await assignmentsByStoreId(stores.map(({ id }) => id));
-  res.json({
+  const payload = {
     stores: stores.map((store) =>
       publicStore(store, assignments.get(store.id) ?? null),
     ),
-  });
+  };
+  if (paginated) payload.pagination = { page: currentPage, limit: pageLimit, total: count, totalPages: Math.ceil(count / pageLimit) };
+  res.json(payload);
 }
 
 async function createStore(req, res) {
