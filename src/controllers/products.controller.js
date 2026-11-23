@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { randomBytes } = require("node:crypto");
+const { randomUUID } = require("node:crypto");
 const sequelize = require("../config/database");
 const Product = require("../models/product");
 const Branch = require("../models/branch");
@@ -30,8 +30,8 @@ function productIncludes() {
   ];
 }
 
-function createBarcode(branchId, variantId) {
-  return ["XL", branchId, variantId, randomBytes(10).toString("hex").toUpperCase()].join("-");
+function createBarcode() {
+  return `QR-${randomUUID()}`;
 }
 
 function parseDate(value, endOfDay = false) {
@@ -50,18 +50,31 @@ async function listProductBranches(_req, res) {
 }
 
 async function listProducts(req, res) {
-  const { status, search, branchId, startDate, endDate } = req.query;
+  const { status, search, branchId, startDate, endDate, start_date, end_date, variantId, total_data } = req.query;
   if (status && !STATUSES.has(status)) return res.status(400).json({ error: "Status produk tidak valid." });
-  const start = parseDate(startDate);
-  const end = parseDate(endDate, true);
+  const usesCreatedAtDates = start_date !== undefined || end_date !== undefined;
+  const rawStartDate = usesCreatedAtDates ? start_date : startDate;
+  const rawEndDate = usesCreatedAtDates ? end_date : endDate;
+  if ((rawStartDate !== undefined && typeof rawStartDate !== "string") ||
+    (rawEndDate !== undefined && typeof rawEndDate !== "string")) {
+    return res.status(400).json({ error: "Rentang tanggal tidak valid." });
+  }
+  const start = parseDate(rawStartDate);
+  const end = parseDate(rawEndDate, true);
   if (start === undefined || end === undefined || (start && end && start > end)) {
     return res.status(400).json({ error: "Rentang tanggal tidak valid." });
   }
   const where = {};
   if (status) where.status = status;
   if (branchId) {
-    if (!/^\d+$/.test(branchId)) return res.status(400).json({ error: "Cabang tidak valid." });
+    if (typeof branchId !== "string" || !/^\d+$/.test(branchId)) return res.status(400).json({ error: "Cabang tidak valid." });
     where.branchId = Number(branchId);
+  }
+  if (variantId !== undefined) {
+    if (typeof variantId !== "string" || !/^\d+$/.test(variantId)) {
+      return res.status(400).json({ error: "Varian tidak valid." });
+    }
+    where.variantId = Number(variantId);
   }
   if (search) {
     const query = "%" + String(search).trim().replace(/[\\%_]/g, "\\$&") + "%";
@@ -71,14 +84,28 @@ async function listProducts(req, res) {
     ];
   }
   if (start || end) {
-    where.updatedAt = {};
-    if (start) where.updatedAt[Op.gte] = start;
-    if (end) where.updatedAt[Op.lte] = end;
+    const dateField = usesCreatedAtDates ? "createdAt" : "updatedAt";
+    where[dateField] = {};
+    if (start) where[dateField][Op.gte] = start;
+    if (end) where[dateField][Op.lte] = end;
   }
-  const products = await Product.findAll({
+  const options = {
     where,
     include: productIncludes(),
-    order: [["updatedAt", "DESC"]],
+    order: [
+      [usesCreatedAtDates || variantId !== undefined || total_data !== undefined ? "createdAt" : "updatedAt", "DESC"],
+      ["id", "DESC"],
+    ],
+  };
+  if (total_data !== undefined) {
+    const allowedTotals = new Set(["500", "1000", "1500", "2000"]);
+    if (typeof total_data !== "string" || !allowedTotals.has(total_data)) {
+      return res.status(400).json({ error: "Jumlah data tidak valid." });
+    }
+    options.limit = Number(total_data);
+  }
+  const products = await Product.findAll({
+    ...options,
   });
   res.json({ products: products.map(publicProduct) });
 }
@@ -93,7 +120,7 @@ async function generateProducts(req, res) {
     return res.status(400).json({ error: "Cabang, varian, dan jumlah produk (1–500) wajib diisi." });
   }
 
-  const barcodes = Array.from({ length: quantity }, () => createBarcode(branchId, variantId));
+  const barcodes = Array.from({ length: quantity }, () => createBarcode());
   const result = await sequelize.transaction(async (transaction) => {
     const [branch, variant] = await Promise.all([
       Branch.findByPk(branchId, { transaction, lock: transaction.LOCK.UPDATE }),
