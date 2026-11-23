@@ -1,16 +1,13 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
 const Branch = require("./branch");
+const Variant = require("./variant");
 
 const Product = sequelize.define("Product", {
   id: {
     type: DataTypes.INTEGER.UNSIGNED,
     autoIncrement: true,
     primaryKey: true,
-  },
-  name: {
-    type: DataTypes.STRING(180),
-    allowNull: false,
   },
   barcode: {
     type: DataTypes.STRING(120),
@@ -21,6 +18,12 @@ const Product = sequelize.define("Product", {
     type: DataTypes.INTEGER.UNSIGNED,
     allowNull: false,
     references: { model: "branches", key: "id" },
+    onDelete: "RESTRICT",
+  },
+  variantId: {
+    type: DataTypes.INTEGER.UNSIGNED,
+    allowNull: true,
+    references: { model: "variants", key: "id" },
     onDelete: "RESTRICT",
   },
   status: {
@@ -34,5 +37,6 @@ const Product = sequelize.define("Product", {
 });
 
 Product.belongsTo(Branch, { as: "branchRecord", foreignKey: "branchId" });
+Product.belongsTo(Variant, { as: "variantRecord", foreignKey: "variantId" });
 
 module.exports = Product;

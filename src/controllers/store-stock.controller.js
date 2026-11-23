@@ -36,7 +36,7 @@ async function listStoreStock(_req, res) {
     stocks.map((stock) => [`${stock.storeId}:${stock.variantId}`, stock]),
   );
   const rows = stores.flatMap((store) =>
-    variants.map((variant) => {
+    variants.filter((variant) => !store.branchId || !variant.branchId || store.branchId === variant.branchId).map((variant) => {
       const stock = stockByPair.get(`${store.id}:${variant.id}`);
       return publicStock(store, variant, stock);
     }),
@@ -63,6 +63,9 @@ async function adjustStoreStock(req, res) {
       Variant.findByPk(variantId, { transaction }),
     ]);
     if (!store || !variant) return null;
+    if (store.branchId && variant.branchId && store.branchId !== variant.branchId) {
+      return { variantBranchMismatch: true };
+    }
 
     const [stock] = await StoreStock.findOrCreate({
       where: { storeId, variantId },
@@ -82,6 +85,7 @@ async function adjustStoreStock(req, res) {
   });
 
   if (!result) return res.status(404).json({ error: "Toko atau varian tidak ditemukan." });
+  if (result.variantBranchMismatch) return res.status(400).json({ error: "Varian bukan milik cabang toko ini." });
   if (result.insufficient) return res.status(400).json({ error: "Jumlah pengurangan melebihi stok yang tersedia." });
   if (result.overflow) return res.status(400).json({ error: "Jumlah stok melebihi batas maksimum." });
 
@@ -128,16 +132,31 @@ async function receiveStoreStock(req, res) {
   const result = await sequelize.transaction(async (transaction) => {
     const store = await Store.findByPk(storeId, { transaction, lock: transaction.LOCK.UPDATE });
     if (!store) return { notFound: true };
+    const variants = await Variant.findAll({
+      where: { id: [...seenVariants] },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (variants.length !== seenVariants.size) return { variantNotFound: true };
+    const variantById = new Map(variants.map((variant) => [variant.id, variant]));
+    const mismatchedVariant = variants.find((variant) =>
+      store.branchId && variant.branchId && store.branchId !== variant.branchId,
+    );
+    if (mismatchedVariant) {
+      return { variantBranchMismatch: true, variantName: mismatchedVariant.name };
+    }
+
     const updated = [];
     for (const item of items) {
       const variantId = Number(item.variantId);
       const quantity = Number(item.quantity);
-      const variant = await Variant.findByPk(variantId, { transaction, lock: transaction.LOCK.UPDATE });
+      const variant = variantById.get(variantId);
       if (!variant) return { variantNotFound: true };
 
-      // Daftar Produk tracks individual units, so the product name maps to its perfume variant.
+      const productWhere = { variantId, status: "di_gudang" };
+      if (store.branchId) productWhere.branchId = store.branchId;
       const products = await Product.findAll({
-        where: { name: variant.name, status: "di_gudang" },
+        where: productWhere,
         order: [["id", "ASC"]],
         limit: quantity,
         transaction,
@@ -169,6 +188,9 @@ async function receiveStoreStock(req, res) {
 
   if (result.notFound) return res.status(404).json({ error: "Toko tidak ditemukan." });
   if (result.variantNotFound) return res.status(404).json({ error: "Varian tidak ditemukan." });
+  if (result.variantBranchMismatch) {
+    return res.status(400).json({ error: `Varian ${result.variantName} bukan milik cabang toko ini.` });
+  }
   if (result.insufficientWarehouse) {
     if (result.available === 0) {
       return res.status(400).json({ error: `Tidak ada produk ${result.variantName} berstatus Di Gudang.` });

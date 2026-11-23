@@ -630,7 +630,7 @@ const openapiSpec = {
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "status", in: "query", schema: { type: "string", enum: ["pending", "di_gudang", "di_toko", "di_spg", "di_collecting", "terjual", "rusak"] } },
-          { name: "search", in: "query", description: "Search product name or barcode.", schema: { type: "string" } },
+          { name: "search", in: "query", description: "Search variant name or barcode.", schema: { type: "string" } },
           { name: "branchId", in: "query", schema: { type: "integer" } },
           { name: "startDate", in: "query", schema: { type: "string", format: "date" } },
           { name: "endDate", in: "query", schema: { type: "string", format: "date" } },
@@ -648,6 +648,32 @@ const openapiSpec = {
         tags: ["Products"],
         security: [{ bearerAuth: [] }],
         responses: { 200: { description: "Branch identifiers and names." }, 403: { description: "The account does not have inventory access." } },
+      },
+    },
+    "/api/products/generate": {
+      post: {
+        operationId: "generateProducts",
+        summary: "Generate multiple products for a branch and variant",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["branchId", "variantId", "quantity"],
+            properties: {
+              branchId: { type: "integer", minimum: 1 },
+              variantId: { type: "integer", minimum: 1 },
+              quantity: { type: "integer", minimum: 1, maximum: 500 },
+            },
+          } } },
+        },
+        responses: {
+          201: { description: "Products with unique barcodes were created in Pending status." },
+          400: { description: "The variant is not assigned to the selected branch or the quantity is invalid." },
+          403: { description: "The account does not have inventory access." },
+          404: { description: "The branch or variant was not found." },
+        },
       },
     },
     "/api/products/warehouse-movement": {
@@ -695,9 +721,12 @@ const openapiSpec = {
     "/api/variants": {
       get: {
         operationId: "listVariants",
-        summary: "List product variants",
+        summary: "List product variants, optionally filtered by branch",
         tags: ["Variants"],
         security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "branchId", in: "query", schema: { type: "integer", minimum: 1 } },
+        ],
         responses: {
           200: { description: "Product variant records." },
           403: { description: "The account does not have inventory access." },
@@ -1054,12 +1083,13 @@ const openapiSpec = {
       },
       VariantInput: {
         type: "object",
-        required: ["name", "quantity", "unit", "unitPrice"],
+        required: ["name", "quantity", "unit", "unitPrice", "branchId"],
         properties: {
           name: { type: "string", maxLength: 150, example: "Eau de Parfum 50 ml" },
           quantity: { type: "integer", minimum: 0, example: 24 },
           unit: { type: "string", maxLength: 40, example: "pcs" },
           unitPrice: { type: "number", minimum: 0, example: 125000 },
+          branchId: { type: "integer", minimum: 1 },
         },
       },
       StoreStockUpdater: {

@@ -41,10 +41,15 @@ authenticated administrator and returns up to 500 newest entries; pass
 ## Products
 
 `GET /api/products` lists barcode-tracked products and accepts optional `status`,
-`search` (name or barcode), `branchId`, `startDate`, and `endDate` filters.
+`search` (variant name or barcode), `branchId`, `startDate`, and `endDate` filters.
+`POST /api/products/generate` accepts `{ branchId, variantId, quantity }` and
+creates 1–500 Pending products with unique barcodes in one transaction.
 `GET /api/products/:id` returns product details and activity history matched by
 the exact barcode in activity log details or entity IDs. `DELETE /api/products/:id`
-removes it and records the action in the activity log. Products use one of the
+removes it and records the action in the activity log. Each product references a
+variant by `variantId` instead of storing its own name. Variants are assigned to
+a branch; `GET /api/variants?branchId=1` filters the catalog for that branch.
+Products use one of the
 statuses `pending`, `di_gudang`, `di_toko`, `di_spg`, `di_collecting`,
 `terjual`, or `rusak` and belong to a branch.
 

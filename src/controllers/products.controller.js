@@ -1,7 +1,9 @@
 const { Op } = require("sequelize");
+const { randomBytes } = require("node:crypto");
 const sequelize = require("../config/database");
 const Product = require("../models/product");
 const Branch = require("../models/branch");
+const Variant = require("../models/variant");
 const ActivityLog = require("../models/activity-log");
 const logActivity = require("../middleware/activity-log");
 
@@ -10,14 +12,26 @@ const STATUSES = new Set(["pending", "di_gudang", "di_toko", "di_spg", "di_colle
 function publicProduct(product) {
   return {
     id: product.id,
-    name: product.name,
     barcode: product.barcode,
     branchId: product.branchId,
     branch: product.branchRecord?.name ?? "—",
+    variantId: product.variantId,
+    variantName: product.variantRecord?.name ?? null,
     status: product.status,
     createdAt: product.createdAt,
     updatedAt: product.updatedAt,
   };
+}
+
+function productIncludes() {
+  return [
+    { model: Branch, as: "branchRecord", attributes: ["name"] },
+    { model: Variant, as: "variantRecord", attributes: ["name"] },
+  ];
+}
+
+function createBarcode(branchId, variantId) {
+  return ["XL", branchId, variantId, randomBytes(10).toString("hex").toUpperCase()].join("-");
 }
 
 function parseDate(value, endOfDay = false) {
@@ -50,8 +64,11 @@ async function listProducts(req, res) {
     where.branchId = Number(branchId);
   }
   if (search) {
-    const query = `%${String(search).trim().replace(/[\\%_]/g, "\\$&")}%`;
-    where[Op.or] = [{ name: { [Op.like]: query } }, { barcode: { [Op.like]: query } }];
+    const query = "%" + String(search).trim().replace(/[\\%_]/g, "\\$&") + "%";
+    where[Op.or] = [
+      { barcode: { [Op.like]: query } },
+      { "$variantRecord.name$": { [Op.like]: query } },
+    ];
   }
   if (start || end) {
     where.updatedAt = {};
@@ -60,10 +77,78 @@ async function listProducts(req, res) {
   }
   const products = await Product.findAll({
     where,
-    include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
+    include: productIncludes(),
     order: [["updatedAt", "DESC"]],
   });
   res.json({ products: products.map(publicProduct) });
+}
+
+async function generateProducts(req, res) {
+  const branchId = Number(req.body?.branchId);
+  const variantId = Number(req.body?.variantId);
+  const quantity = Number(req.body?.quantity);
+  if (!Number.isInteger(branchId) || branchId < 1 ||
+    !Number.isInteger(variantId) || variantId < 1 ||
+    !Number.isInteger(quantity) || quantity < 1 || quantity > 500) {
+    return res.status(400).json({ error: "Cabang, varian, dan jumlah produk (1–500) wajib diisi." });
+  }
+
+  const barcodes = Array.from({ length: quantity }, () => createBarcode(branchId, variantId));
+  const result = await sequelize.transaction(async (transaction) => {
+    const [branch, variant] = await Promise.all([
+      Branch.findByPk(branchId, { transaction, lock: transaction.LOCK.UPDATE }),
+      Variant.findByPk(variantId, { transaction, lock: transaction.LOCK.UPDATE }),
+    ]);
+    if (!branch) return { branchNotFound: true };
+    if (!variant) return { variantNotFound: true };
+    if (Number(variant.branchId) !== branchId) return { variantBranchMismatch: true };
+
+    await Product.bulkCreate(barcodes.map((barcode) => ({
+      barcode,
+      branchId,
+      variantId,
+      status: "pending",
+    })), { transaction });
+
+    const products = await Product.findAll({
+      where: { barcode: barcodes },
+      include: productIncludes(),
+      order: [["id", "ASC"]],
+      transaction,
+    });
+    return { products };
+  });
+
+  if (result.branchNotFound) return res.status(404).json({ error: "Cabang tidak ditemukan." });
+  if (result.variantNotFound) return res.status(404).json({ error: "Varian tidak ditemukan." });
+  if (result.variantBranchMismatch) {
+    return res.status(400).json({ error: "Varian tidak tersedia untuk cabang yang dipilih." });
+  }
+
+  try {
+    await ActivityLog.bulkCreate(result.products.map((product) => ({
+      userId: req.user?.id ?? null,
+      username: req.user?.username ?? null,
+      action: "create",
+      entityType: "product",
+      entityId: String(product.id),
+      details: {
+        barcode: product.barcode,
+        variantId: product.variantId,
+        variantName: product.variantRecord?.name ?? null,
+        branchId: product.branchId,
+        branch: product.branchRecord?.name ?? "—",
+      },
+      ipAddress: req.ip?.slice(0, 45) ?? null,
+      userAgent: req.get("user-agent")?.slice(0, 65535) ?? null,
+    })));
+  } catch (error) {
+    console.error("Unable to write product generation activity logs:", error);
+  }
+  res.status(201).json({
+    count: result.products.length,
+    products: result.products.map(publicProduct),
+  });
 }
 
 async function moveWarehouseProducts(req, res) {
@@ -82,7 +167,7 @@ async function moveWarehouseProducts(req, res) {
   const result = await sequelize.transaction(async (transaction) => {
     const products = await Product.findAll({
       where: { barcode: normalized },
-      include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
+      include: productIncludes(),
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
@@ -107,7 +192,8 @@ async function moveWarehouseProducts(req, res) {
       entityId: product.id,
       details: {
         barcode: product.barcode,
-        name: product.name,
+        variantId: product.variantId,
+        variantName: product.variantRecord?.name ?? null,
         direction,
         fromStatus,
         toStatus,
@@ -120,7 +206,7 @@ async function moveWarehouseProducts(req, res) {
 
 async function getProduct(req, res) {
   const product = await Product.findByPk(req.params.id, {
-    include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
+    include: productIncludes(),
   });
   if (!product) return res.status(404).json({ error: "Produk tidak ditemukan." });
   const activityLogs = await ActivityLog.findAll({
@@ -144,9 +230,16 @@ async function getProduct(req, res) {
 }
 
 async function deleteProduct(req, res) {
-  const product = await Product.findByPk(req.params.id);
+  const product = await Product.findByPk(req.params.id, {
+    include: [{ model: Variant, as: "variantRecord", attributes: ["name"] }],
+  });
   if (!product) return res.status(404).json({ error: "Produk tidak ditemukan." });
-  const deletedProduct = { id: product.id, name: product.name, barcode: product.barcode };
+  const deletedProduct = {
+    id: product.id,
+    variantId: product.variantId,
+    variantName: product.variantRecord?.name ?? null,
+    barcode: product.barcode,
+  };
   await product.destroy();
   await logActivity(req, {
     action: "delete",
@@ -157,4 +250,4 @@ async function deleteProduct(req, res) {
   res.status(204).end();
 }
 
-module.exports = { deleteProduct, getProduct, listProductBranches, listProducts, moveWarehouseProducts };
+module.exports = { deleteProduct, generateProducts, getProduct, listProductBranches, listProducts, moveWarehouseProducts };

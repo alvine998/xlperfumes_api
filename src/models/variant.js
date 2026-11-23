@@ -1,5 +1,6 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
+const Branch = require("./branch");
 
 const Variant = sequelize.define("Variant", {
   id: {
@@ -23,9 +24,17 @@ const Variant = sequelize.define("Variant", {
     type: DataTypes.DECIMAL(15, 2),
     allowNull: false,
   },
+  branchId: {
+    type: DataTypes.INTEGER.UNSIGNED,
+    allowNull: true,
+    references: { model: "branches", key: "id" },
+    onDelete: "RESTRICT",
+  },
 }, {
   tableName: "variants",
   timestamps: true,
 });
+
+Variant.belongsTo(Branch, { as: "branchRecord", foreignKey: "branchId" });
 
 module.exports = Variant;
