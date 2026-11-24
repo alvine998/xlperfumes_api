@@ -78,9 +78,15 @@ are sent to that routing service when the route map is opened.
 
 Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `OPENAI_API_KEY` in
 the API environment. The webhook uses `OPENAI_MODEL` (default
-`gpt-4o-mini`) and an optional `OPENAI_SYSTEM_PROMPT`. It sends each incoming
-text message to OpenAI and sends the reply back to the same Telegram chat.
-Non-text updates and messages sent by bots are acknowledged without a reply.
+`gpt-4o-mini`) and an optional `OPENAI_SYSTEM_PROMPT`. For product, price,
+store-location, and store-stock questions, the model can call read-only search
+tools backed by the live variants, branches, stores, and store-stock tables.
+This gives the bot database-grounded answers without a separate embedding
+index; stock is identified as a recorded count because it may not be a live
+physical count. The model then writes the reply and sends it back to the same
+Telegram chat. Non-text updates and messages sent by bots are acknowledged
+without a reply.
+
 The webhook does not require user authentication; it validates Telegram's
 `X-Telegram-Bot-Api-Secret-Token` header. Generate the webhook secret with
 `openssl rand -hex 32` and use the same value when registering the webhook.

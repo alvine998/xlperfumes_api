@@ -10,7 +10,7 @@ const openapiSpec = {
     "/api/telegram/webhook": {
       post: {
         operationId: "handleTelegramWebhook",
-        summary: "Handle a Telegram bot update",
+        summary: "Handle a Telegram bot update and answer with live catalog context",
         tags: ["Telegram"],
         parameters: [{
           in: "header",
