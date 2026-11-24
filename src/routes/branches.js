@@ -10,11 +10,13 @@ const {
 
 const router = express.Router();
 
-router.use(authenticate, requirePermission("stores"));
+router.use(authenticate);
 
-router.get("/", asyncHandler(listBranches));
-router.post("/", asyncHandler(createBranch));
-router.patch("/:id", asyncHandler(updateBranch));
-router.delete("/:id", asyncHandler(deleteBranch));
+router.get("/", requirePermission([
+  "branchs", "zonas", "stores", "store_inventory", "warehouse_inventory", "store_visit", "print_store_barcodes",
+]), asyncHandler(listBranches));
+router.post("/", requirePermission("branchs"), asyncHandler(createBranch));
+router.patch("/:id", requirePermission("branchs"), asyncHandler(updateBranch));
+router.delete("/:id", requirePermission("branchs"), asyncHandler(deleteBranch));
 
 module.exports = router;

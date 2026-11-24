@@ -5,11 +5,13 @@ const { listStores, createStore, updateStore, deleteStore } = require("../contro
 
 const router = express.Router();
 
-router.use(authenticate, requirePermission("stores"));
+router.use(authenticate);
 
-router.get("/", asyncHandler(listStores));
-router.post("/", asyncHandler(createStore));
-router.patch("/:id", asyncHandler(updateStore));
-router.delete("/:id", asyncHandler(deleteStore));
+router.get("/", requirePermission([
+  "stores", "zonas", "store_inventory", "warehouse_inventory", "store_visit", "print_store_barcodes",
+]), asyncHandler(listStores));
+router.post("/", requirePermission("stores"), asyncHandler(createStore));
+router.patch("/:id", requirePermission("stores"), asyncHandler(updateStore));
+router.delete("/:id", requirePermission("stores"), asyncHandler(deleteStore));
 
 module.exports = router;

@@ -18,7 +18,7 @@ const {
 
 const router = express.Router();
 
-router.use(authenticate, requirePermission("stores"));
+router.use(authenticate, requirePermission("zonas"));
 
 router.get("/", asyncHandler(listZones));
 router.get("/collectors", asyncHandler(listZoneCollectors));

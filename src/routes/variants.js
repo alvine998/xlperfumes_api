@@ -5,11 +5,13 @@ const { listVariants, createVariant, updateVariant, deleteVariant } = require(".
 
 const router = express.Router();
 
-router.use(authenticate, requirePermission("inventory"));
+router.use(authenticate);
 
-router.get("/", asyncHandler(listVariants));
-router.post("/", asyncHandler(createVariant));
-router.patch("/:id", asyncHandler(updateVariant));
-router.delete("/:id", asyncHandler(deleteVariant));
+router.get("/", requirePermission([
+  "variants", "products", "generate_product", "store_inventory", "warehouse_inventory",
+]), asyncHandler(listVariants));
+router.post("/", requirePermission("variants"), asyncHandler(createVariant));
+router.patch("/:id", requirePermission("variants"), asyncHandler(updateVariant));
+router.delete("/:id", requirePermission("variants"), asyncHandler(deleteVariant));
 
 module.exports = router;

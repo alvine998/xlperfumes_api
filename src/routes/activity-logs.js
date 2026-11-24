@@ -5,7 +5,7 @@ const { listActivityLogs } = require("../controllers/activity-logs.controller");
 
 const router = express.Router();
 
-router.use(authenticate, requirePermission("activity"));
+router.use(authenticate, requirePermission("activity_logs"));
 
 router.get("/", asyncHandler(listActivityLogs));
 

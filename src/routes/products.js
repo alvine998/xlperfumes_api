@@ -4,12 +4,16 @@ const { authenticate, requirePermission } = require("../middleware/permissions")
 const { deleteProduct, generateProducts, getProduct, listProductBranches, listProducts, moveWarehouseProducts } = require("../controllers/products.controller");
 
 const router = express.Router();
-router.use(authenticate, requirePermission("inventory"));
-router.get("/branches", asyncHandler(listProductBranches));
-router.post("/warehouse-movement", asyncHandler(moveWarehouseProducts));
-router.post("/generate", asyncHandler(generateProducts));
-router.get("/", asyncHandler(listProducts));
-router.get("/:id", asyncHandler(getProduct));
-router.delete("/:id", asyncHandler(deleteProduct));
+router.use(authenticate);
+router.get("/branches", requirePermission([
+  "products", "variants", "generate_product", "print_product_barcodes", "warehouse_inventory",
+]), asyncHandler(listProductBranches));
+router.post("/warehouse-movement", requirePermission("warehouse_inventory"), asyncHandler(moveWarehouseProducts));
+router.post("/generate", requirePermission("generate_product"), asyncHandler(generateProducts));
+router.get("/", requirePermission([
+  "products", "generate_product", "print_product_barcodes", "warehouse_inventory",
+]), asyncHandler(listProducts));
+router.get("/:id", requirePermission("products"), asyncHandler(getProduct));
+router.delete("/:id", requirePermission("products"), asyncHandler(deleteProduct));
 
 module.exports = router;

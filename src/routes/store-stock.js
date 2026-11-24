@@ -5,7 +5,7 @@ const { listStoreStock, adjustStoreStock, receiveStoreStock } = require("../cont
 
 const router = express.Router();
 
-router.use(authenticate, requirePermission("inventory"));
+router.use(authenticate, requirePermission("store_inventory"));
 
 router.get("/", asyncHandler(listStoreStock));
 router.post("/:storeId/receive", asyncHandler(receiveStoreStock));

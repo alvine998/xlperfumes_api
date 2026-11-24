@@ -2,17 +2,12 @@ const Role = require("../models/role");
 const User = require("../models/user");
 const logActivity = require("../middleware/activity-log");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
-
-const ROLE_SLUGS = ["admin", "spg", "collecting", "gudang", "owner"];
-const FEATURES = ["overview", "inventory", "sales", "stores", "users", "activity"];
-
-const DEFAULT_PERMISSIONS = {
-  owner: { overview: true, inventory: true, sales: true, stores: true, users: true, activity: true },
-  admin: { overview: true, inventory: true, sales: true, stores: true, users: true, activity: true },
-  gudang: { overview: true, inventory: true, sales: false, stores: false, users: false, activity: false },
-  collecting: { overview: true, inventory: false, sales: true, stores: false, users: false, activity: false },
-  spg: { overview: true, inventory: true, sales: true, stores: false, users: false, activity: false },
-};
+const {
+  FEATURE_KEYS: FEATURES,
+  ROLE_SLUGS,
+  DEFAULT_PERMISSIONS,
+  normalizeRolePermissions,
+} = require("../utils/permissions");
 
 const ROLE_NAMES = {
   owner: "Owner",
@@ -27,7 +22,7 @@ function publicRole(role) {
     id: role.id,
     name: role.name,
     slug: role.slug,
-    permissions: role.permissions,
+    permissions: normalizeRolePermissions(role.permissions, role.slug),
     createdAt: role.createdAt,
   };
 }
@@ -42,9 +37,7 @@ function isValidPermissions(value) {
 }
 
 function isValidRolePermissions(value) {
-  return value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
+  return value && typeof value === "object" && !Array.isArray(value) &&
     FEATURES.every((feature) => typeof value[feature] === "boolean");
 }
 
@@ -62,10 +55,16 @@ async function hasActiveRoleManager(overrides = {}) {
     User.findAll({ attributes: ["role"], where: { isActive: true } }),
     Role.findAll(),
   ]);
-  const permissionsByRole = { ...DEFAULT_PERMISSIONS };
-  for (const role of savedRoles) permissionsByRole[role.slug] = role.permissions;
-  Object.assign(permissionsByRole, overrides);
-  return activeUsers.some((user) => permissionsByRole[user.role]?.users);
+  const permissionsByRole = Object.fromEntries(
+    ROLE_SLUGS.map((slug) => [slug, normalizeRolePermissions(DEFAULT_PERMISSIONS[slug], slug)]),
+  );
+  for (const role of savedRoles) {
+    permissionsByRole[role.slug] = normalizeRolePermissions(role.permissions, role.slug);
+  }
+  for (const [slug, permissions] of Object.entries(overrides)) {
+    permissionsByRole[slug] = normalizeRolePermissions(permissions, slug);
+  }
+  return activeUsers.some((user) => permissionsByRole[user.role]?.roles);
 }
 
 async function listRoles(req, res) {
@@ -77,7 +76,10 @@ async function listRoles(req, res) {
     : { rows: await Role.findAll(options), count: null };
   const allPermissions = await Role.findAll({ attributes: ["slug", "permissions"] });
   const permissions = Object.fromEntries(
-    allPermissions.map((role) => [role.slug, role.permissions]),
+    allPermissions.map((role) => [
+      role.slug,
+      normalizeRolePermissions(role.permissions, role.slug),
+    ]),
   );
   const payload = { roles: result.rows.map(publicRole), permissions };
   if (pagination) payload.pagination = paginationMetadata(pagination, result.count);
@@ -139,7 +141,9 @@ async function updateRole(req, res) {
 
   if (body.name !== undefined) role.name = body.name.trim();
   if (body.slug !== undefined) role.slug = body.slug;
-  if (body.permissions !== undefined) role.permissions = body.permissions;
+  if (body.permissions !== undefined) {
+    role.permissions = normalizeRolePermissions(body.permissions, role.slug);
+  }
   await role.save();
   await logActivity(req, {
     action: "update",

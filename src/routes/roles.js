@@ -11,7 +11,7 @@ const {
 
 const router = express.Router();
 
-router.use(authenticate, requirePermission("users"));
+router.use(authenticate, requirePermission("roles"));
 
 router.get("/", asyncHandler(listRoles));
 router.put("/permissions", asyncHandler(updatePermissions));
