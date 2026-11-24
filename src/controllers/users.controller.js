@@ -1,6 +1,8 @@
 const bcrypt = require("bcryptjs");
+const { Op } = require("sequelize");
 const User = require("../models/user");
 const logActivity = require("../middleware/activity-log");
+const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 
 const USER_ROLES = ["admin", "spg", "collecting", "gudang", "owner"];
 
@@ -30,9 +32,34 @@ async function activeAdminCount() {
   return User.count({ where: { role: "admin", isActive: true } });
 }
 
-async function listUsers(_req, res) {
-  const users = await User.findAll({ order: [["id", "ASC"]] });
-  res.json({ users: users.map(publicUser) });
+async function listUsers(req, res) {
+  const pagination = paginationFromQuery(req.query);
+  const where = {};
+  if (typeof req.query.role === "string" && req.query.role.trim()) {
+    where.role = req.query.role.trim();
+  }
+  if (req.query.isActive === "true") where.isActive = true;
+  if (req.query.isActive === "false") where.isActive = false;
+  if (typeof req.query.search === "string" && req.query.search.trim()) {
+    const search = req.query.search.trim().replace(/[\\%_]/g, "\\$&");
+    where.username = { [Op.like]: `%${search}%` };
+  }
+  const options = { where, order: [["id", "ASC"]] };
+  const resultPromise = pagination
+    ? User.findAndCountAll({ ...options, limit: pagination.limit, offset: pagination.offset })
+    : User.findAll(options).then((rows) => ({ rows, count: null }));
+  const [result, totalUsers, activeUsers, adminUsers] = await Promise.all([
+    resultPromise,
+    User.count(),
+    User.count({ where: { isActive: true } }),
+    User.count({ where: { role: "admin" } }),
+  ]);
+  const payload = {
+    users: result.rows.map(publicUser),
+    summary: { totalUsers, activeUsers, adminUsers },
+  };
+  if (pagination) payload.pagination = paginationMetadata(pagination, result.count);
+  res.json(payload);
 }
 
 async function createUser(req, res) {

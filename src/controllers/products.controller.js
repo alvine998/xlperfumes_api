@@ -6,6 +6,7 @@ const Branch = require("../models/branch");
 const Variant = require("../models/variant");
 const ActivityLog = require("../models/activity-log");
 const logActivity = require("../middleware/activity-log");
+const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 
 const STATUSES = new Set(["pending", "di_gudang", "di_toko", "di_spg", "di_collecting", "terjual", "rusak"]);
 
@@ -44,9 +45,15 @@ function parseDate(value, endOfDay = false) {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
-async function listProductBranches(_req, res) {
-  const branches = await Branch.findAll({ attributes: ["id", "name"], order: [["name", "ASC"]] });
-  res.json({ branches });
+async function listProductBranches(req, res) {
+  const pagination = paginationFromQuery(req.query);
+  const options = { attributes: ["id", "name"], order: [["name", "ASC"]] };
+  const result = pagination
+    ? await Branch.findAndCountAll({ ...options, limit: pagination.limit, offset: pagination.offset })
+    : { rows: await Branch.findAll(options), count: null };
+  const payload = { branches: result.rows };
+  if (pagination) payload.pagination = paginationMetadata(pagination, result.count);
+  res.json(payload);
 }
 
 async function listProducts(req, res) {
@@ -65,6 +72,7 @@ async function listProducts(req, res) {
     return res.status(400).json({ error: "Rentang tanggal tidak valid." });
   }
   const where = {};
+  const pagination = paginationFromQuery(req.query);
   if (status) where.status = status;
   if (branchId) {
     if (typeof branchId !== "string" || !/^\d+$/.test(branchId)) return res.status(400).json({ error: "Cabang tidak valid." });
@@ -97,17 +105,34 @@ async function listProducts(req, res) {
       ["id", "DESC"],
     ],
   };
+  let maxResults = null;
   if (total_data !== undefined) {
     const allowedTotals = new Set(["500", "1000", "1500", "2000"]);
     if (typeof total_data !== "string" || !allowedTotals.has(total_data)) {
       return res.status(400).json({ error: "Jumlah data tidak valid." });
     }
-    options.limit = Number(total_data);
+    maxResults = Number(total_data);
   }
-  const products = await Product.findAll({
-    ...options,
-  });
-  res.json({ products: products.map(publicProduct) });
+  const result = pagination
+    ? await Product.findAndCountAll({
+      ...options,
+      distinct: true,
+      limit: Math.max(1, Math.min(
+        pagination.limit,
+        maxResults === null ? pagination.limit : maxResults - pagination.offset,
+      )),
+      offset: pagination.offset,
+    })
+    : { rows: await Product.findAll(options), count: null };
+  const visibleRows = maxResults === null
+    ? result.rows
+    : result.rows.slice(0, Math.max(0, maxResults - pagination.offset));
+  const payload = { products: visibleRows.map(publicProduct) };
+  if (pagination) payload.pagination = paginationMetadata(
+    pagination,
+    maxResults === null ? result.count : Math.min(result.count, maxResults),
+  );
+  res.json(payload);
 }
 
 async function generateProducts(req, res) {
@@ -236,7 +261,8 @@ async function getProduct(req, res) {
     include: productIncludes(),
   });
   if (!product) return res.status(404).json({ error: "Produk tidak ditemukan." });
-  const activityLogs = await ActivityLog.findAll({
+  const pagination = paginationFromQuery(req.query);
+  const activityOptions = {
     where: {
       [Op.or]: [
         { entityId: product.barcode },
@@ -244,16 +270,25 @@ async function getProduct(req, res) {
       ],
     },
     order: [["createdAt", "DESC"]],
-  });
-  res.json({
+  };
+  const activityResult = pagination
+    ? await ActivityLog.findAndCountAll({
+      ...activityOptions,
+      limit: pagination.limit,
+      offset: pagination.offset,
+    })
+    : { rows: await ActivityLog.findAll(activityOptions), count: null };
+  const payload = {
     product: publicProduct(product),
-    activityLogs: activityLogs.map((log) => ({
+    activityLogs: activityResult.rows.map((log) => ({
       id: log.id,
       username: log.username,
       action: log.action,
       createdAt: log.createdAt,
     })),
-  });
+  };
+  if (pagination) payload.activityPagination = paginationMetadata(pagination, activityResult.count);
+  res.json(payload);
 }
 
 async function deleteProduct(req, res) {

@@ -4,6 +4,7 @@ const Branch = require("../models/branch");
 const Store = require("../models/store");
 const User = require("../models/user");
 const logActivity = require("../middleware/activity-log");
+const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 
 function isValidDetails(body) {
   return typeof body.name === "string" &&
@@ -32,30 +33,49 @@ function publicBranch(
   };
 }
 
-async function listBranches(_req, res) {
-  const [branches, storeCounts] = await Promise.all([
-    Branch.findAll({
-      include: [{ model: User, as: "creator", attributes: ["id", "username"] }],
-      order: [["createdAt", "DESC"]],
-    }),
-    Store.findAll({
+async function listBranches(req, res) {
+  const pagination = paginationFromQuery(req.query);
+  const where = {};
+  if (typeof req.query.search === "string" && req.query.search.trim()) {
+    const search = req.query.search.trim().replace(/[\\%_]/g, "\\$&");
+    where[Op.or] = ["name", "city", "address"].map((field) => ({
+      [field]: { [Op.like]: `%${search}%` },
+    }));
+  }
+  const branchOptions = {
+    where,
+    include: [{ model: User, as: "creator", attributes: ["id", "username"] }],
+    order: [["createdAt", "DESC"]],
+  };
+  const branchResult = pagination
+    ? await Branch.findAndCountAll({
+      ...branchOptions,
+      limit: pagination.limit,
+      offset: pagination.offset,
+    })
+    : { rows: await Branch.findAll(branchOptions), count: null };
+  const branchIds = branchResult.rows.map(({ id }) => id);
+  const storeCounts = branchIds.length
+    ? await Store.findAll({
       attributes: [
         "branchId",
         [fn("COUNT", col("id")), "storeCount"],
       ],
-      where: { branchId: { [Op.not]: null } },
+      where: { branchId: { [Op.in]: branchIds } },
       group: ["branchId"],
       raw: true,
-    }),
-  ]);
+    })
+    : [];
   const countsByBranch = new Map(
     storeCounts.map((entry) => [Number(entry.branchId), Number(entry.storeCount)]),
   );
-  res.json({
-    branches: branches.map((branch) =>
+  const payload = {
+    branches: branchResult.rows.map((branch) =>
       publicBranch(branch, countsByBranch.get(branch.id) ?? 0),
     ),
-  });
+  };
+  if (pagination) payload.pagination = paginationMetadata(pagination, branchResult.count);
+  res.json(payload);
 }
 
 async function createBranch(req, res) {

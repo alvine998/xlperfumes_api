@@ -1,6 +1,7 @@
 const Role = require("../models/role");
 const User = require("../models/user");
 const logActivity = require("../middleware/activity-log");
+const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 
 const ROLE_SLUGS = ["admin", "spg", "collecting", "gudang", "owner"];
 const FEATURES = ["overview", "inventory", "sales", "stores", "users", "activity"];
@@ -67,13 +68,20 @@ async function hasActiveRoleManager(overrides = {}) {
   return activeUsers.some((user) => permissionsByRole[user.role]?.users);
 }
 
-async function listRoles(_req, res) {
+async function listRoles(req, res) {
   await ensureDefaultRoles();
-  const roles = await Role.findAll({ order: [["id", "ASC"]] });
+  const pagination = paginationFromQuery(req.query);
+  const options = { order: [["id", "ASC"]] };
+  const result = pagination
+    ? await Role.findAndCountAll({ ...options, limit: pagination.limit, offset: pagination.offset })
+    : { rows: await Role.findAll(options), count: null };
+  const allPermissions = await Role.findAll({ attributes: ["slug", "permissions"] });
   const permissions = Object.fromEntries(
-    roles.map((role) => [role.slug, role.permissions]),
+    allPermissions.map((role) => [role.slug, role.permissions]),
   );
-  res.json({ roles: roles.map(publicRole), permissions });
+  const payload = { roles: result.rows.map(publicRole), permissions };
+  if (pagination) payload.pagination = paginationMetadata(pagination, result.count);
+  res.json(payload);
 }
 
 async function createRole(req, res) {

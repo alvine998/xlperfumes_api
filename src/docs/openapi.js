@@ -1,3 +1,8 @@
+const paginationParameters = [
+  { name: "page", in: "query", required: false, schema: { type: "integer", minimum: 1, default: 1 } },
+  { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } },
+];
+
 const openapiSpec = {
   openapi: "3.0.3",
   info: {
@@ -126,6 +131,12 @@ const openapiSpec = {
         summary: "List users",
         tags: ["Users"],
         security: [{ bearerAuth: [] }],
+        parameters: [
+          ...paginationParameters,
+          { name: "search", in: "query", schema: { type: "string" } },
+          { name: "role", in: "query", schema: { $ref: "#/components/schemas/UserRole" } },
+          { name: "isActive", in: "query", schema: { type: "boolean" } },
+        ],
         responses: {
           200: {
             description: "Users without password hashes.",
@@ -135,6 +146,15 @@ const openapiSpec = {
                   type: "object",
                   properties: {
                     users: { type: "array", items: { $ref: "#/components/schemas/User" } },
+                    pagination: { $ref: "#/components/schemas/Pagination" },
+                    summary: {
+                      type: "object",
+                      properties: {
+                        totalUsers: { type: "integer", minimum: 0 },
+                        activeUsers: { type: "integer", minimum: 0 },
+                        adminUsers: { type: "integer", minimum: 0 },
+                      },
+                    },
                   },
                 },
               },
@@ -229,8 +249,12 @@ const openapiSpec = {
         summary: "List branches",
         tags: ["Branches"],
         security: [{ bearerAuth: [] }],
+        parameters: [
+          ...paginationParameters,
+          { name: "search", in: "query", schema: { type: "string" } },
+        ],
         responses: {
-          200: { description: "Branches with creator names and linked store counts." },
+          200: { description: "Branches with creator names and linked store counts. The backend always returns one page (default 50) and pagination metadata." },
           403: { description: "Access to store management is required." },
         },
       },
@@ -275,8 +299,13 @@ const openapiSpec = {
         summary: "List zones",
         tags: ["Zones"],
         security: [{ bearerAuth: [] }],
+        parameters: [
+          ...paginationParameters,
+          { name: "branchId", in: "query", schema: { type: "integer", minimum: 1 } },
+          { name: "search", in: "query", schema: { type: "string" } },
+        ],
         responses: {
-          200: { description: "Zones with branch, creator, and linked store counts." },
+          200: { description: "Zones with branch, creator, and linked store counts. The backend always returns one page (default 50) and pagination metadata." },
           403: { description: "Access to store management is required." },
         },
       },
@@ -301,8 +330,9 @@ const openapiSpec = {
         summary: "List active collecting users for zone assignments",
         tags: ["Zones"],
         security: [{ bearerAuth: [] }],
+        parameters: paginationParameters,
         responses: {
-          200: { description: "Active collecting users eligible for zone membership or PIC." },
+          200: { description: "Active collecting users eligible for zone membership or PIC, returned as a backend-paginated page (default 50)." },
           403: { description: "Access to store management is required." },
         },
       },
@@ -313,10 +343,13 @@ const openapiSpec = {
         summary: "Get a zone and its stores",
         tags: ["Zones"],
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          ...paginationParameters,
+        ],
         responses: {
           200: {
-            description: "Zone details, its stores in route order, and unassigned stores from the same branch.",
+            description: "Zone details, one page of its stores in route order, and one page of unassigned stores from the same branch. Both arrays always include separate pagination metadata (default 50).",
             content: {
               "application/json": {
                 schema: {
@@ -332,6 +365,8 @@ const openapiSpec = {
                       type: "array",
                       items: { $ref: "#/components/schemas/ZoneStoreCandidate" },
                     },
+                    storesPagination: { $ref: "#/components/schemas/Pagination" },
+                    availableStoresPagination: { $ref: "#/components/schemas/Pagination" },
                   },
                 },
               },
@@ -468,9 +503,12 @@ const openapiSpec = {
         summary: "List users assigned to a zone",
         tags: ["Zones"],
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          ...paginationParameters,
+        ],
         responses: {
-          200: { description: "Users assigned to the zone." },
+          200: { description: "Users assigned to the zone, returned as a backend-paginated page (default 50)." },
           404: { description: "Zone not found." },
         },
       },
@@ -513,8 +551,10 @@ const openapiSpec = {
           { name: "start_date", in: "query", description: "Inclusive creation date in Asia/Jakarta (YYYY-MM-DD).", schema: { type: "string", format: "date" } },
           { name: "end_date", in: "query", description: "Inclusive creation date in Asia/Jakarta (YYYY-MM-DD).", schema: { type: "string", format: "date" } },
           { name: "store_name", in: "query", schema: { type: "string" } },
+          { name: "branch", in: "query", schema: { type: "string" } },
+          { name: "sortOrder", in: "query", schema: { type: "string", enum: ["newest", "oldest"], default: "newest" } },
         ],
-        responses: { 200: { description: "Stores ordered by creation date, with pagination metadata when filters or pagination parameters are supplied." }, 400: { description: "Invalid date filter." }, 403: { description: "The user does not have store access." } },
+        responses: { 200: { description: "Stores ordered by creation date, returned as a backend-paginated page (default 50) with pagination metadata." }, 400: { description: "Invalid date filter." }, 403: { description: "The user does not have store access." } },
       },
       post: {
         operationId: "createStore",
@@ -557,12 +597,21 @@ const openapiSpec = {
     "/api/store-stock": {
       get: {
         operationId: "listStoreStock",
-        summary: "List stock for every store",
+        summary: "List stock for every store with optional server-side pagination",
         tags: ["Store stock"],
         security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "page", in: "query", required: false, schema: { type: "integer", minimum: 1, default: 1 } },
+          { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 100, default: 10 } },
+          { name: "search", in: "query", required: false, schema: { type: "string" } },
+          { name: "branch", in: "query", required: false, schema: { type: "string" } },
+          { name: "startDate", in: "query", required: false, schema: { type: "string", format: "date" } },
+          { name: "endDate", in: "query", required: false, schema: { type: "string", format: "date" } },
+          { name: "sortOrder", in: "query", required: false, schema: { type: "string", enum: ["newest", "oldest"], default: "newest" } },
+        ],
         responses: {
           200: {
-            description: "Stock totals for each store and product variant, including the last updater.",
+            description: "Stock totals for each store and product variant, including the last updater. Rows are always paginated by store (default 10) and the response includes pagination metadata and branch options.",
             content: {
               "application/json": {
                 schema: {
@@ -572,6 +621,17 @@ const openapiSpec = {
                     stocks: {
                       type: "array",
                       items: { $ref: "#/components/schemas/StoreVariantStock" },
+                    },
+                    branches: { type: "array", items: { type: "string" } },
+                    pagination: {
+                      type: "object",
+                      required: ["page", "limit", "total", "totalPages"],
+                      properties: {
+                        page: { type: "integer", minimum: 1 },
+                        limit: { type: "integer", minimum: 1, maximum: 100 },
+                        total: { type: "integer", minimum: 0 },
+                        totalPages: { type: "integer", minimum: 0 },
+                      },
                     },
                   },
                 },
@@ -629,6 +689,7 @@ const openapiSpec = {
         tags: ["Products"],
         security: [{ bearerAuth: [] }],
         parameters: [
+          ...paginationParameters,
           { name: "status", in: "query", schema: { type: "string", enum: ["pending", "di_gudang", "di_toko", "di_spg", "di_collecting", "terjual", "rusak"] } },
           { name: "search", in: "query", description: "Search variant name or barcode.", schema: { type: "string" } },
           { name: "branchId", in: "query", schema: { type: "integer" } },
@@ -640,7 +701,7 @@ const openapiSpec = {
           { name: "total_data", in: "query", description: "Maximum number of products to return.", schema: { type: "integer", enum: [500, 1000, 1500, 2000] } },
         ],
         responses: {
-          200: { description: "Products matching the filters. Print filters sort by creation date; standard product-list filters sort by update date." },
+          200: { description: "Products matching the filters. Print filters sort by creation date; standard product-list filters sort by update date. Results are always backend-paginated (default 50) with pagination metadata." },
           403: { description: "The account does not have inventory access." },
         },
       },
@@ -651,7 +712,8 @@ const openapiSpec = {
         summary: "List branches available for product filters",
         tags: ["Products"],
         security: [{ bearerAuth: [] }],
-        responses: { 200: { description: "Branch identifiers and names." }, 403: { description: "The account does not have inventory access." } },
+        parameters: paginationParameters,
+        responses: { 200: { description: "Branch identifiers and names, returned as a backend-paginated page (default 50)." }, 403: { description: "The account does not have inventory access." } },
       },
     },
     "/api/products/generate": {
@@ -710,8 +772,11 @@ const openapiSpec = {
         summary: "Get product details",
         tags: ["Products"],
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
-        responses: { 200: { description: "Product details and activity history matched by barcode." }, 404: { description: "Product not found." } },
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          ...paginationParameters,
+        ],
+        responses: { 200: { description: "Product details and one backend-paginated page of activity history matched by barcode (default 50). Includes activityPagination metadata." }, 404: { description: "Product not found." } },
       },
       delete: {
         operationId: "deleteProduct",
@@ -729,10 +794,12 @@ const openapiSpec = {
         tags: ["Variants"],
         security: [{ bearerAuth: [] }],
         parameters: [
+          ...paginationParameters,
           { name: "branchId", in: "query", schema: { type: "integer", minimum: 1 } },
+          { name: "search", in: "query", schema: { type: "string" } },
         ],
         responses: {
-          200: { description: "Product variant records." },
+          200: { description: "Product variant records, returned as a backend-paginated page (default 50)." },
           403: { description: "The account does not have inventory access." },
         },
       },
@@ -815,8 +882,9 @@ const openapiSpec = {
         summary: "List roles and feature access",
         tags: ["Roles"],
         security: [{ bearerAuth: [] }],
+        parameters: paginationParameters,
         responses: {
-          200: { description: "Roles with their feature permissions." },
+          200: { description: "One page of roles and their feature permissions (default 50); permissions retains the full role matrix." },
           403: { description: "The account does not have role management access." },
         },
       },
@@ -865,21 +933,27 @@ const openapiSpec = {
         summary: "List activity logs",
         tags: ["Activity logs"],
         security: [{ bearerAuth: [] }],
-        parameters: [{
-          name: "limit",
-          in: "query",
-          required: false,
-          schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
-        }],
+        parameters: [
+          { name: "page", in: "query", required: false, schema: { type: "integer", minimum: 1, default: 1 } },
+          { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } },
+          { name: "action", in: "query", schema: { type: "string" } },
+          { name: "username", in: "query", schema: { type: "string" } },
+          { name: "branch", in: "query", description: "Filter by the branch recorded in activity details, or use Tanpa cabang.", schema: { type: "string" } },
+          { name: "startDate", in: "query", schema: { type: "string", format: "date" } },
+          { name: "endDate", in: "query", schema: { type: "string", format: "date" } },
+          { name: "search", in: "query", schema: { type: "string" } },
+          { name: "includeOptions", in: "query", schema: { type: "boolean", default: false } },
+        ],
         responses: {
           200: {
-            description: "Newest activity logs.",
+            description: "Newest activity logs matching the filters, returned as a backend-paginated page (default 100). includeOptions returns dropdown values from the latest 500 logs.",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
                   properties: {
                     activityLogs: { type: "array", items: { $ref: "#/components/schemas/ActivityLog" } },
+                    pagination: { $ref: "#/components/schemas/Pagination" },
                   },
                 },
               },
@@ -919,6 +993,16 @@ const openapiSpec = {
       bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
     },
     schemas: {
+      Pagination: {
+        type: "object",
+        required: ["page", "limit", "total", "totalPages"],
+        properties: {
+          page: { type: "integer", minimum: 1 },
+          limit: { type: "integer", minimum: 1 },
+          total: { type: "integer", minimum: 0 },
+          totalPages: { type: "integer", minimum: 0 },
+        },
+      },
       FeaturePermissions: {
         type: "object",
         required: ["overview", "inventory", "sales", "stores", "users", "activity"],

@@ -6,6 +6,8 @@ const Product = require("../models/product");
 const sequelize = require("../config/database");
 const logActivity = require("../middleware/activity-log");
 
+const MAX_STORE_STOCK_PAGE_LIMIT = 100;
+
 function publicStock(store, variant, stock) {
   return {
     id: `${store.id}:${variant.id}`,
@@ -24,7 +26,32 @@ function publicStock(store, variant, stock) {
   };
 }
 
-async function listStoreStock(_req, res) {
+function positiveInteger(value, fallback, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? Math.min(parsed, max)
+    : fallback;
+}
+
+function validDateOnly(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+async function listStoreStock(req, res) {
+  const startDate = req.query.startDate;
+  const endDate = req.query.endDate;
+  if (startDate !== undefined && !validDateOnly(startDate)) {
+    return res.status(400).json({ error: "Tanggal mulai tidak valid." });
+  }
+  if (endDate !== undefined && !validDateOnly(endDate)) {
+    return res.status(400).json({ error: "Tanggal akhir tidak valid." });
+  }
+  if (startDate && endDate && startDate > endDate) {
+    return res.status(400).json({ error: "Rentang tanggal tidak valid." });
+  }
+
   const [stores, variants, stocks] = await Promise.all([
     Store.findAll({ order: [["createdAt", "DESC"]] }),
     Variant.findAll({ order: [["createdAt", "DESC"]] }),
@@ -41,7 +68,76 @@ async function listStoreStock(_req, res) {
       return publicStock(store, variant, stock);
     }),
   );
-  res.json({ stocks: rows });
+
+  const page = positiveInteger(req.query.page, 1);
+  const limit = positiveInteger(req.query.limit, 10, MAX_STORE_STOCK_PAGE_LIMIT);
+  const search = typeof req.query.search === "string"
+    ? req.query.search.trim().toLocaleLowerCase("id-ID")
+    : "";
+  const branch = typeof req.query.branch === "string" ? req.query.branch.trim() : "";
+  const sortOrder = req.query.sortOrder === "oldest" ? "oldest" : "newest";
+  const startTimestamp = startDate
+    ? new Date(`${startDate}T00:00:00.000+07:00`).getTime()
+    : -Infinity;
+  const endTimestamp = endDate
+    ? new Date(`${endDate}T23:59:59.999+07:00`).getTime()
+    : Infinity;
+
+  const rowsByStore = new Map();
+  const summaries = new Map();
+  for (const row of rows) {
+    const storeRows = rowsByStore.get(row.storeId) ?? [];
+    storeRows.push(row);
+    rowsByStore.set(row.storeId, storeRows);
+
+    const summary = summaries.get(row.storeId) ?? {
+      storeId: row.storeId,
+      name: row.name,
+      branch: row.branch,
+      lastUpdate: null,
+    };
+    if (
+      row.lastUpdate &&
+      (!summary.lastUpdate || new Date(row.lastUpdate) > new Date(summary.lastUpdate))
+    ) {
+      summary.lastUpdate = row.lastUpdate;
+    }
+    summaries.set(row.storeId, summary);
+  }
+
+  const allSummaries = [...summaries.values()];
+  const filteredSummaries = allSummaries
+    .filter((store) => {
+      const updated = store.lastUpdate ? new Date(store.lastUpdate).getTime() : null;
+      return (
+        (!search || store.name.toLocaleLowerCase("id-ID").includes(search)) &&
+        (!branch || branch === "all" || store.branch === branch) &&
+        ((startTimestamp === -Infinity && endTimestamp === Infinity) ||
+          (updated !== null && updated >= startTimestamp && updated <= endTimestamp))
+      );
+    })
+    .sort((a, b) => {
+      if (!a.lastUpdate) return b.lastUpdate ? 1 : 0;
+      if (!b.lastUpdate) return -1;
+      const delta = new Date(a.lastUpdate).getTime() - new Date(b.lastUpdate).getTime();
+      return sortOrder === "newest" ? -delta : delta;
+    });
+
+  const total = filteredSummaries.length;
+  const totalPages = Math.ceil(total / limit);
+  const currentPage = Math.min(page, Math.max(1, totalPages));
+  const firstStoreIndex = (currentPage - 1) * limit;
+  const pageSummaries = filteredSummaries.slice(firstStoreIndex, firstStoreIndex + limit);
+  const pageRows = pageSummaries.flatMap((store) => rowsByStore.get(store.storeId) ?? []);
+  const branches = [...new Set(allSummaries.map((store) => store.branch))].sort((a, b) =>
+    a.localeCompare(b, "id-ID"),
+  );
+
+  res.json({
+    stocks: pageRows,
+    branches,
+    pagination: { page: currentPage, limit, total, totalPages },
+  });
 }
 
 async function adjustStoreStock(req, res) {

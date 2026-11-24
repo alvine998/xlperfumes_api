@@ -1,4 +1,4 @@
-const { col, fn } = require("sequelize");
+const { Op, col, fn } = require("sequelize");
 const sequelize = require("../config/database");
 const Zone = require("../models/zone");
 const Branch = require("../models/branch");
@@ -7,6 +7,7 @@ const StoreZona = require("../models/store-zona");
 const User = require("../models/user");
 const UserZona = require("../models/user-zona");
 const logActivity = require("../middleware/activity-log");
+const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 
 function publicZone(
   zone,
@@ -54,26 +55,49 @@ function isValidDetails(body) {
       (Number.isInteger(Number(userPicId)) && Number(userPicId) > 0));
 }
 
-async function listZones(_req, res) {
-  const [zones, storeCounts, memberCounts] = await Promise.all([
-    Zone.findAll({
-      include: [
-        { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
-        { model: User, as: "creator", attributes: ["id", "username"] },
-        { model: User, as: "pic", attributes: ["id", "username"] },
-      ],
-      order: [["createdAt", "DESC"]],
-    }),
-    StoreZona.findAll({
+async function listZones(req, res) {
+  const pagination = paginationFromQuery(req.query);
+  const where = {};
+  if (req.query.branchId !== undefined) {
+    if (typeof req.query.branchId !== "string" || !/^\d+$/.test(req.query.branchId)) {
+      return res.status(400).json({ error: "Cabang tidak valid." });
+    }
+    where.branchId = Number(req.query.branchId);
+  }
+  if (typeof req.query.search === "string" && req.query.search.trim()) {
+    const search = req.query.search.trim().replace(/[\\%_]/g, "\\$&");
+    where[Op.or] = [
+      { name: { [Op.like]: `%${search}%` } },
+      { "$branchRecord.name$": { [Op.like]: `%${search}%` } },
+      { "$creator.username$": { [Op.like]: `%${search}%` } },
+    ];
+  }
+  const zoneOptions = {
+    where,
+    include: [
+      { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
+      { model: User, as: "creator", attributes: ["id", "username"] },
+      { model: User, as: "pic", attributes: ["id", "username"] },
+    ],
+    order: [["createdAt", "DESC"]],
+  };
+  const zoneResult = pagination
+    ? await Zone.findAndCountAll({ ...zoneOptions, limit: pagination.limit, offset: pagination.offset })
+    : { rows: await Zone.findAll(zoneOptions), count: null };
+  const zoneIds = zoneResult.rows.map(({ id }) => id);
+  const [storeCounts, memberCounts] = await Promise.all([
+    zoneIds.length ? StoreZona.findAll({
       attributes: ["zonaId", [fn("COUNT", col("storeId")), "storeCount"]],
+      where: { zonaId: { [Op.in]: zoneIds } },
       group: ["zonaId"],
       raw: true,
-    }),
-    UserZona.findAll({
+    }) : [],
+    zoneIds.length ? UserZona.findAll({
       attributes: ["zonaId", [fn("COUNT", col("user_id")), "memberCount"]],
+      where: { zonaId: { [Op.in]: zoneIds } },
       group: ["zonaId"],
       raw: true,
-    }),
+    }) : [],
   ]);
   const countsByZone = new Map(
     storeCounts.map((entry) => [Number(entry.zonaId), Number(entry.storeCount)]),
@@ -81,8 +105,8 @@ async function listZones(_req, res) {
   const membersByZone = new Map(
     memberCounts.map((entry) => [Number(entry.zonaId), Number(entry.memberCount)]),
   );
-  res.json({
-    zones: zones.map((zone) =>
+  const payload = {
+    zones: zoneResult.rows.map((zone) =>
       publicZone(
         zone,
         countsByZone.get(zone.id) ?? 0,
@@ -90,21 +114,28 @@ async function listZones(_req, res) {
         membersByZone.get(zone.id) ?? 0,
       ),
     ),
-  });
+  };
+  if (pagination) payload.pagination = paginationMetadata(pagination, zoneResult.count);
+  res.json(payload);
 }
 
-async function listZoneCollectors(_req, res) {
-  const users = await User.findAll({
+async function listZoneCollectors(req, res) {
+  const pagination = paginationFromQuery(req.query);
+  const options = {
     attributes: ["id", "username"],
     where: { role: "collecting", isActive: true },
     order: [["username", "ASC"]],
-  });
-  res.json({
-    users: users.map((user) => ({ id: user.id, username: user.username })),
-  });
+  };
+  const result = pagination
+    ? await User.findAndCountAll({ ...options, limit: pagination.limit, offset: pagination.offset })
+    : { rows: await User.findAll(options), count: null };
+  const payload = { users: result.rows.map((user) => ({ id: user.id, username: user.username })) };
+  if (pagination) payload.pagination = paginationMetadata(pagination, result.count);
+  res.json(payload);
 }
 
 async function getZoneDetail(req, res) {
+  const pagination = paginationFromQuery(req.query);
   const zone = await Zone.findByPk(req.params.id, {
     include: [
       { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
@@ -114,54 +145,80 @@ async function getZoneDetail(req, res) {
   });
   if (!zone) return res.status(404).json({ error: "Zona tidak ditemukan." });
 
-  const [storeAssignments, branchStores, memberCount] = await Promise.all([
+  const assignmentOptions = {
+    where: { zonaId: zone.id },
+    include: [{
+      model: Store,
+      as: "store",
+      include: [{ model: Branch, as: "branchRecord", attributes: ["id", "name"] }],
+    }],
+    order: [["routeIndex", "ASC"], ["storeId", "ASC"]],
+  };
+  const [assignmentResult, assignedBranchRows, memberCount] = await Promise.all([
+    pagination
+      ? StoreZona.findAndCountAll({
+        ...assignmentOptions,
+        limit: pagination.limit,
+        offset: pagination.offset,
+      })
+      : StoreZona.findAll(assignmentOptions).then((rows) => ({ rows, count: null })),
     StoreZona.findAll({
-      where: { zonaId: zone.id },
+      attributes: ["storeId"],
       include: [{
         model: Store,
         as: "store",
-        include: [{ model: Branch, as: "branchRecord", attributes: ["id", "name"] }],
+        attributes: [],
+        where: { branchId: zone.branchId },
       }],
-      order: [["routeIndex", "ASC"], ["storeId", "ASC"]],
-    }),
-    Store.findAll({
-      where: { branchId: zone.branchId },
-      include: [{ model: Branch, as: "branchRecord", attributes: ["id", "name"] }],
-      order: [["name", "ASC"]],
     }),
     UserZona.count({ where: { zonaId: zone.id } }),
   ]);
-  const currentStoreIds = new Set(storeAssignments.map(({ storeId }) => storeId));
-  const assignedStoreRows = await StoreZona.findAll({
-    attributes: ["storeId"],
-    where: { storeId: branchStores.map(({ id }) => id) },
-  });
-  const assignedStoreIds = new Set(assignedStoreRows.map(({ storeId }) => storeId));
-  const stores = storeAssignments.map(({ store, routeIndex }) =>
+  const assignedStoreIds = assignedBranchRows.map(({ storeId }) => storeId);
+  const availableWhere = { branchId: zone.branchId };
+  if (assignedStoreIds.length) availableWhere.id = { [Op.notIn]: assignedStoreIds };
+  const availableOptions = {
+    where: availableWhere,
+    include: [{ model: Branch, as: "branchRecord", attributes: ["id", "name"] }],
+    order: [["name", "ASC"]],
+  };
+  const availableResult = pagination
+    ? await Store.findAndCountAll({
+      ...availableOptions,
+      limit: pagination.limit,
+      offset: pagination.offset,
+    })
+    : { rows: await Store.findAll(availableOptions), count: null };
+  const stores = assignmentResult.rows.map(({ store, routeIndex }) =>
     publicZoneStore(store, routeIndex),
   );
-  const availableStores = branchStores
-    .filter((store) =>
-      !currentStoreIds.has(store.id) && !assignedStoreIds.has(store.id),
-    )
-    .map((store) => ({
-      id: store.id,
-      name: store.name,
-      branch: store.branchRecord?.name ?? store.branch,
-      branchId: store.branchId,
-      zonaId: null,
-      zona: null,
-      routeIndex: null,
-      address: store.address,
-      latitude: Number(store.latitude),
-      longitude: Number(store.longitude),
-      createdAt: store.createdAt,
-    }));
-  res.json({
-    zone: publicZone(zone, stores.length, undefined, memberCount),
+  const availableStores = availableResult.rows.map((store) => ({
+    id: store.id,
+    name: store.name,
+    branch: store.branchRecord?.name ?? store.branch,
+    branchId: store.branchId,
+    zonaId: null,
+    zona: null,
+    routeIndex: null,
+    address: store.address,
+    latitude: Number(store.latitude),
+    longitude: Number(store.longitude),
+    createdAt: store.createdAt,
+  }));
+  const payload = {
+    zone: publicZone(
+      zone,
+      assignmentResult.count ?? assignmentResult.rows.length,
+      undefined,
+      memberCount,
+    ),
     stores,
     availableStores,
-  });
+  };
+  if (pagination) {
+    payload.storesPagination = paginationMetadata(pagination, assignmentResult.count);
+    payload.availableStoresPagination = paginationMetadata(pagination, availableResult.count);
+  }
+  res.json(payload);
 }
 
 async function createZone(req, res) {
@@ -295,7 +352,8 @@ async function getZoneUsers(req, res) {
   const zone = await Zone.findByPk(req.params.id, { attributes: ["id"] });
   if (!zone) return res.status(404).json({ error: "Zona tidak ditemukan." });
 
-  const assignments = await UserZona.findAll({
+  const pagination = paginationFromQuery(req.query);
+  const options = {
     where: { zonaId: zone.id },
     include: [{
       model: User,
@@ -303,15 +361,20 @@ async function getZoneUsers(req, res) {
       attributes: ["id", "username", "role", "isActive"],
     }],
     order: [[{ model: User, as: "user" }, "username", "ASC"]],
-  });
-  res.json({
-    users: assignments.map(({ user }) => ({
+  };
+  const result = pagination
+    ? await UserZona.findAndCountAll({ ...options, limit: pagination.limit, offset: pagination.offset })
+    : { rows: await UserZona.findAll(options), count: null };
+  const payload = {
+    users: result.rows.map(({ user }) => ({
       id: user.id,
       username: user.username,
       role: user.role,
       isActive: user.isActive,
     })),
-  });
+  };
+  if (pagination) payload.pagination = paginationMetadata(pagination, result.count);
+  res.json(payload);
 }
 
 async function updateZoneUsers(req, res) {

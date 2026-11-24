@@ -4,6 +4,7 @@ const Zone = require("../models/zone");
 const StoreZona = require("../models/store-zona");
 const logActivity = require("../middleware/activity-log");
 const { Op } = require("sequelize");
+const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 
 function publicStore(store, assignment = null) {
   return {
@@ -45,11 +46,22 @@ function validJakartaDate(value) {
 }
 
 async function listStores(req, res) {
-  const { page, limit, start_date: startDate, end_date: endDate, store_name: storeName } = req.query;
-  const paginated = page !== undefined || limit !== undefined || startDate !== undefined ||
-    endDate !== undefined || storeName !== undefined;
+  const {
+    start_date: startDate,
+    end_date: endDate,
+    store_name: storeName,
+    branch,
+    sortOrder,
+  } = req.query;
+  const pagination = paginationFromQuery(req.query);
   const where = {};
-  if (typeof storeName === "string" && storeName.trim()) where.name = { [Op.like]: `%${storeName.trim()}%` };
+  if (typeof storeName === "string" && storeName.trim()) {
+    const search = storeName.trim().replace(/[\\%_]/g, "\\$&");
+    where.name = { [Op.like]: `%${search}%` };
+  }
+  if (typeof branch === "string" && branch.trim() && branch !== "all") {
+    where.branch = branch.trim();
+  }
   if (startDate || endDate) {
     const createdAt = {};
     if (startDate) {
@@ -66,25 +78,25 @@ async function listStores(req, res) {
     }
     where.createdAt = createdAt;
   }
-  const currentPage = Math.max(1, Number.parseInt(page, 10) || 1);
-  const pageLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 50));
   const options = {
     where,
     include: [
       { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
     ],
-    order: [["createdAt", "DESC"]],
+    order: [["createdAt", sortOrder === "oldest" ? "ASC" : "DESC"]],
   };
-  const { rows: stores, count } = paginated
-    ? await Store.findAndCountAll({ ...options, limit: pageLimit, offset: (currentPage - 1) * pageLimit })
-    : { rows: await Store.findAll(options), count: null };
+  const { rows: stores, count } = await Store.findAndCountAll({
+    ...options,
+    limit: pagination.limit,
+    offset: pagination.offset,
+  });
   const assignments = await assignmentsByStoreId(stores.map(({ id }) => id));
   const payload = {
     stores: stores.map((store) =>
       publicStore(store, assignments.get(store.id) ?? null),
     ),
   };
-  if (paginated) payload.pagination = { page: currentPage, limit: pageLimit, total: count, totalPages: Math.ceil(count / pageLimit) };
+  payload.pagination = paginationMetadata(pagination, count);
   res.json(payload);
 }
 

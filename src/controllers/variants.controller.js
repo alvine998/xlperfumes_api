@@ -1,7 +1,9 @@
+const { Op } = require("sequelize");
 const Variant = require("../models/variant");
 const Branch = require("../models/branch");
 const Product = require("../models/product");
 const logActivity = require("../middleware/activity-log");
+const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 
 function publicVariant(variant) {
   return {
@@ -32,12 +34,22 @@ async function listVariants(req, res) {
     }
     where.branchId = Number(req.query.branchId);
   }
-  const variants = await Variant.findAll({
+  if (typeof req.query.search === "string" && req.query.search.trim()) {
+    const search = req.query.search.trim().replace(/[\\%_]/g, "\\$&");
+    where.name = { [Op.like]: `%${search}%` };
+  }
+  const pagination = paginationFromQuery(req.query);
+  const options = {
     where,
     include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
     order: [["createdAt", "DESC"]],
-  });
-  res.json({ variants: variants.map(publicVariant) });
+  };
+  const result = pagination
+    ? await Variant.findAndCountAll({ ...options, limit: pagination.limit, offset: pagination.offset })
+    : { rows: await Variant.findAll(options), count: null };
+  const payload = { variants: result.rows.map(publicVariant) };
+  if (pagination) payload.pagination = paginationMetadata(pagination, result.count);
+  res.json(payload);
 }
 
 async function createVariant(req, res) {
