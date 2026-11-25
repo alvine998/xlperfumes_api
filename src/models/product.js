@@ -20,6 +20,12 @@ const Product = sequelize.define("Product", {
     references: { model: "branches", key: "id" },
     onDelete: "RESTRICT",
   },
+  storeId: {
+    type: DataTypes.INTEGER.UNSIGNED,
+    allowNull: true,
+    references: { model: "stores", key: "id" },
+    onDelete: "SET NULL",
+  },
   variantId: {
     type: DataTypes.INTEGER.UNSIGNED,
     allowNull: true,

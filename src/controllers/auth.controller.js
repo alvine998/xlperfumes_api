@@ -12,6 +12,7 @@ function publicUser(user) {
     id: user.id,
     username: user.username,
     role: user.role,
+    branchId: user.branchId ?? null,
     isActive: user.isActive,
     createdAt: user.createdAt,
   };

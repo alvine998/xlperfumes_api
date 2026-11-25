@@ -11,6 +11,8 @@ const migrations = [
   ["202611190007-create-products", require("./202611190007-create-products")],
   ["202611230001-add-branch-id-to-variants", require("./202611230001-add-branch-id-to-variants")],
   ["202611230002-link-products-to-variants", require("./202611230002-link-products-to-variants")],
+  ["202611240001-add-user-branch-id", require("./202611240001-add-user-branch-id")],
+  ["202611240002-add-store-id-to-products", require("./202611240002-add-store-id-to-products")],
 ];
 
 const queryInterface = sequelize.getQueryInterface();

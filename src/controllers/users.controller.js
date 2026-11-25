@@ -1,8 +1,10 @@
 const bcrypt = require("bcryptjs");
 const { Op } = require("sequelize");
 const User = require("../models/user");
+const Branch = require("../models/branch");
 const logActivity = require("../middleware/activity-log");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
+const { assignedBranchId } = require("../utils/user-branch");
 
 const USER_ROLES = ["admin", "spg", "collecting", "gudang", "owner"];
 
@@ -11,6 +13,8 @@ function publicUser(user) {
     id: user.id,
     username: user.username,
     role: user.role,
+    branchId: user.branchId ?? null,
+    branch: user.branchRecord?.name ?? null,
     isActive: user.isActive,
     createdAt: user.createdAt,
   };
@@ -35,6 +39,8 @@ async function activeAdminCount() {
 async function listUsers(req, res) {
   const pagination = paginationFromQuery(req.query);
   const where = {};
+  const branchId = assignedBranchId(req);
+  if (branchId !== null) where.branchId = branchId;
   if (typeof req.query.role === "string" && req.query.role.trim()) {
     where.role = req.query.role.trim();
   }
@@ -44,15 +50,20 @@ async function listUsers(req, res) {
     const search = req.query.search.trim().replace(/[\\%_]/g, "\\$&");
     where.username = { [Op.like]: `%${search}%` };
   }
-  const options = { where, order: [["id", "ASC"]] };
+  const options = {
+    where,
+    include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
+    order: [["id", "ASC"]],
+  };
+  const summaryWhere = branchId === null ? {} : { branchId };
   const resultPromise = pagination
     ? User.findAndCountAll({ ...options, limit: pagination.limit, offset: pagination.offset })
     : User.findAll(options).then((rows) => ({ rows, count: null }));
   const [result, totalUsers, activeUsers, adminUsers] = await Promise.all([
     resultPromise,
-    User.count(),
-    User.count({ where: { isActive: true } }),
-    User.count({ where: { role: "admin" } }),
+    User.count({ where: summaryWhere }),
+    User.count({ where: { ...summaryWhere, isActive: true } }),
+    User.count({ where: { ...summaryWhere, role: "admin" } }),
   ]);
   const payload = {
     users: result.rows.map(publicUser),
@@ -63,18 +74,25 @@ async function listUsers(req, res) {
 }
 
 async function createUser(req, res) {
-  const { username, password, role = "spg" } = req.body ?? {};
-  if (!validateUsername(username) || !validatePassword(password) || !isRole(role)) {
+  const { username, password, role = "spg", branchId: requestedBranchId = null } = req.body ?? {};
+  const branchId = assignedBranchId(req) ?? requestedBranchId;
+  if (!validateUsername(username) || !validatePassword(password) || !isRole(role) ||
+    (branchId !== null && (!Number.isInteger(Number(branchId)) || Number(branchId) < 1))) {
     return res.status(400).json({
-      error: "Username must be 3-50 characters; password must be 8-72 UTF-8 bytes; role is invalid.",
+      error: "Username, password, role, or branch is invalid.",
     });
   }
+
+  const branch = branchId === null ? null : await Branch.findByPk(Number(branchId));
+  if (branchId !== null && !branch) return res.status(400).json({ error: "Cabang tidak ditemukan." });
 
   const user = await User.create({
     username: username.trim(),
     password: await bcrypt.hash(password, 12),
     role,
+    branchId: branch?.id ?? null,
   });
+  user.branchRecord = branch;
   await logActivity(req, {
     action: "create",
     entityType: "user",
@@ -85,11 +103,15 @@ async function createUser(req, res) {
 }
 
 async function updateUser(req, res) {
-  const user = await User.findByPk(req.params.id);
+  const assignedId = assignedBranchId(req);
+  const user = await User.findOne({
+    where: { id: req.params.id, ...(assignedId === null ? {} : { branchId: assignedId }) },
+    include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
+  });
   if (!user) return res.status(404).json({ error: "User not found." });
 
   const body = req.body ?? {};
-  const allowedFields = ["username", "password", "role", "isActive"];
+  const allowedFields = ["username", "password", "role", "isActive", "branchId"];
   if (Object.keys(body).some((field) => !allowedFields.includes(field))) {
     return res.status(400).json({ error: "Request contains unsupported fields." });
   }
@@ -105,6 +127,17 @@ async function updateUser(req, res) {
   if (body.isActive !== undefined && typeof body.isActive !== "boolean") {
     return res.status(400).json({ error: "isActive must be a boolean." });
   }
+  if (assignedId === null && body.branchId !== undefined && body.branchId !== null &&
+    (!Number.isInteger(Number(body.branchId)) || Number(body.branchId) < 1)) {
+    return res.status(400).json({ error: "Cabang tidak valid." });
+  }
+  const effectiveBranchId = assignedId ?? body.branchId;
+  const branch = effectiveBranchId === undefined || effectiveBranchId === null
+    ? null
+    : await Branch.findByPk(Number(effectiveBranchId));
+  if (effectiveBranchId !== undefined && effectiveBranchId !== null && !branch) {
+    return res.status(400).json({ error: "Cabang tidak ditemukan." });
+  }
 
   const isCurrentAdmin = user.role === "admin" && user.isActive;
   const willDisableCurrentAdmin = isCurrentAdmin &&
@@ -116,8 +149,10 @@ async function updateUser(req, res) {
   if (body.username !== undefined) user.username = body.username.trim();
   if (body.role !== undefined) user.role = body.role;
   if (body.isActive !== undefined) user.isActive = body.isActive;
+  if (assignedId !== null || body.branchId !== undefined) user.branchId = branch?.id ?? null;
   if (body.password) user.password = await bcrypt.hash(body.password, 12);
   await user.save();
+  if (assignedId !== null || body.branchId !== undefined) user.branchRecord = branch;
   await logActivity(req, {
     action: "update",
     entityType: "user",
@@ -134,7 +169,10 @@ async function updateUser(req, res) {
 }
 
 async function deleteUser(req, res) {
-  const user = await User.findByPk(req.params.id);
+  const branchId = assignedBranchId(req);
+  const user = await User.findOne({
+    where: { id: req.params.id, ...(branchId === null ? {} : { branchId }) },
+  });
   if (!user) return res.status(404).json({ error: "User not found." });
   if (user.id === req.user.id) {
     return res.status(409).json({ error: "You cannot delete your own account." });

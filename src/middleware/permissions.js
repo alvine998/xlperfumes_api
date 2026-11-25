@@ -23,4 +23,14 @@ function requirePermission(features) {
   };
 }
 
-module.exports = { authenticate, getPermissionsForRole, requirePermission };
+function requireRole(roles) {
+  const allowedRoles = Array.isArray(roles) ? roles : [roles];
+  return (req, res, next) => {
+    if (!allowedRoles.includes(req.user?.role)) {
+      return res.status(403).json({ error: "Fitur ini tidak tersedia untuk peran akun Anda." });
+    }
+    next();
+  };
+}
+
+module.exports = { authenticate, getPermissionsForRole, requirePermission, requireRole };

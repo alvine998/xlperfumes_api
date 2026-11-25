@@ -1,7 +1,9 @@
 const ActivityLog = require("../models/activity-log");
+const Branch = require("../models/branch");
 const sequelize = require("../config/database");
 const { Op } = require("sequelize");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
+const { assignedBranchId } = require("../utils/user-branch");
 
 function parseDateOnly(value, endOfDay = false) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -15,9 +17,24 @@ async function listActivityLogs(req, res) {
   const pagination = paginationFromQuery(req.query, { defaultLimit: 100, maxLimit: 500 });
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
   const where = {};
+  const assignedId = assignedBranchId(req);
+  const assignedBranch = assignedId === null
+    ? null
+    : await Branch.findByPk(assignedId, { attributes: ["id", "name"] });
   if (typeof req.query.action === "string" && req.query.action) where.action = req.query.action;
   if (typeof req.query.username === "string" && req.query.username) where.username = req.query.username;
-  if (typeof req.query.branch === "string" && req.query.branch) {
+  if (assignedId !== null) {
+    if (assignedBranch) {
+      where[Op.and] = [{
+        [Op.or]: [
+          sequelize.where(sequelize.json("details.branch"), assignedBranch.name),
+          sequelize.where(sequelize.json("details.branchId"), assignedBranch.id),
+        ],
+      }];
+    } else {
+      where.id = -1;
+    }
+  } else if (typeof req.query.branch === "string" && req.query.branch) {
     if (req.query.branch === "Tanpa cabang") {
       where[Op.and] = [
         sequelize.where(sequelize.json("details.branch"), null),
@@ -68,19 +85,34 @@ async function listActivityLogs(req, res) {
   const payload = { activityLogs: result.rows };
   if (pagination) payload.pagination = paginationMetadata(pagination, result.count);
   if (req.query.includeOptions === "true") {
+    const latestWhere = assignedId === null
+      ? undefined
+      : assignedBranch
+        ? {
+          [Op.and]: [{
+            [Op.or]: [
+              sequelize.where(sequelize.json("details.branch"), assignedBranch.name),
+              sequelize.where(sequelize.json("details.branchId"), assignedBranch.id),
+            ],
+          }],
+        }
+        : { id: -1 };
     const latestLogs = await ActivityLog.findAll({
       attributes: ["username", "action", "details"],
+      ...(latestWhere ? { where: latestWhere } : {}),
       order: [["createdAt", "DESC"]],
       limit: 500,
     });
     payload.filters = {
       users: [...new Set(latestLogs.map(({ username }) => username).filter(Boolean))].sort(),
       actions: [...new Set(latestLogs.map(({ action }) => action))].sort(),
-      branches: [...new Set(latestLogs.map(({ details }) =>
-        details && typeof details === "object" && typeof details.branch === "string" && details.branch.trim()
-          ? details.branch
-          : "Tanpa cabang",
-      ))].sort(),
+      branches: assignedId !== null
+        ? (assignedBranch ? [assignedBranch.name] : [])
+        : [...new Set(latestLogs.map(({ details }) =>
+          details && typeof details === "object" && typeof details.branch === "string" && details.branch.trim()
+            ? details.branch
+            : "Tanpa cabang",
+        ))].sort(),
     };
   }
   res.json(payload);

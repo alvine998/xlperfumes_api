@@ -21,6 +21,13 @@ const User = sequelize.define("User", {
     allowNull: false,
     defaultValue: "spg",
   },
+  branchId: {
+    type: DataTypes.INTEGER.UNSIGNED,
+    allowNull: true,
+    references: { model: "branches", key: "id" },
+    onUpdate: "CASCADE",
+    onDelete: "SET NULL",
+  },
   isActive: {
     type: DataTypes.BOOLEAN,
     allowNull: false,

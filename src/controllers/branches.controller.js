@@ -5,6 +5,7 @@ const Store = require("../models/store");
 const User = require("../models/user");
 const logActivity = require("../middleware/activity-log");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
+const { assignedBranchId } = require("../utils/user-branch");
 
 function isValidDetails(body) {
   return typeof body.name === "string" &&
@@ -36,6 +37,8 @@ function publicBranch(
 async function listBranches(req, res) {
   const pagination = paginationFromQuery(req.query);
   const where = {};
+  const branchId = assignedBranchId(req);
+  if (branchId !== null) where.id = branchId;
   if (typeof req.query.search === "string" && req.query.search.trim()) {
     const search = req.query.search.trim().replace(/[\\%_]/g, "\\$&");
     where[Op.or] = ["name", "city", "address"].map((field) => ({
@@ -79,6 +82,9 @@ async function listBranches(req, res) {
 }
 
 async function createBranch(req, res) {
+  if (assignedBranchId(req) !== null) {
+    return res.status(403).json({ error: "Pengguna hanya dapat mengakses cabangnya sendiri." });
+  }
   const body = req.body ?? {};
   const allowedFields = ["name", "city", "address"];
   if (Object.keys(body).some((field) => !allowedFields.includes(field)) ||
@@ -117,7 +123,9 @@ async function createBranch(req, res) {
 }
 
 async function updateBranch(req, res) {
-  const branch = await Branch.findByPk(req.params.id, {
+  const assignedId = assignedBranchId(req);
+  const branch = await Branch.findOne({
+    where: { id: req.params.id, ...(assignedId === null ? {} : { id: assignedId }) },
     include: [{ model: User, as: "creator", attributes: ["id", "username"] }],
   });
   if (!branch) return res.status(404).json({ error: "Cabang tidak ditemukan." });
@@ -150,13 +158,19 @@ async function updateBranch(req, res) {
 }
 
 async function deleteBranch(req, res) {
-  const branch = await Branch.findByPk(req.params.id);
+  const assignedId = assignedBranchId(req);
+  const branch = await Branch.findOne({
+    where: { id: req.params.id, ...(assignedId === null ? {} : { id: assignedId }) },
+  });
   if (!branch) return res.status(404).json({ error: "Cabang tidak ditemukan." });
 
   const storeCount = await Store.count({ where: { branchId: branch.id } });
-  if (storeCount > 0) {
+  const assignedUserCount = await User.count({ where: { branchId: branch.id } });
+  if (storeCount > 0 || assignedUserCount > 0) {
     return res.status(409).json({
-      error: "Cabang tidak dapat dihapus karena masih digunakan oleh toko.",
+      error: assignedUserCount > 0
+        ? "Cabang tidak dapat dihapus karena masih ditetapkan kepada pengguna."
+        : "Cabang tidak dapat dihapus karena masih digunakan oleh toko.",
     });
   }
 

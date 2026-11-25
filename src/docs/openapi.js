@@ -179,6 +179,7 @@ const openapiSpec = {
                   username: { type: "string", minLength: 3, maxLength: 50 },
                   password: { type: "string", minLength: 8, maxLength: 72, format: "password" },
                   role: { $ref: "#/components/schemas/UserRole" },
+                  branchId: { type: "integer", nullable: true, description: "Restricts branch-filtered data to this branch." },
                 },
               },
             },
@@ -213,6 +214,7 @@ const openapiSpec = {
                   username: { type: "string", minLength: 3, maxLength: 50 },
                   password: { type: "string", minLength: 8, maxLength: 72, format: "password" },
                   role: { $ref: "#/components/schemas/UserRole" },
+                  branchId: { type: "integer", nullable: true, description: "Restricts branch-filtered data to this branch." },
                   isActive: { type: "boolean" },
                 },
               },
@@ -682,6 +684,101 @@ const openapiSpec = {
         },
       },
     },
+    "/api/store-stock/{storeId}/visit": {
+      get: {
+        operationId: "getVisitStoreStock",
+        summary: "Get stock and tracked products for a store visit",
+        tags: ["Store stock"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "storeId", in: "path", required: true, schema: { type: "integer" } }],
+        responses: {
+          200: { description: "Store stock by variant, barcode-linked products at the store, and whether the current account can manage products." },
+          403: { description: "The account does not have store visit access." },
+          404: { description: "Store not found in the user's assigned branch." },
+        },
+      },
+    },
+    "/api/store-stock/{storeId}/visit/receive": {
+      post: {
+        operationId: "receiveVisitProducts",
+        summary: "Move the collecting user's products into a visited store",
+        tags: ["Store stock"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "storeId", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["barcodes"],
+            properties: {
+              barcodes: { type: "array", minItems: 1, maxItems: 500, items: { type: "string", maxLength: 120 } },
+            },
+          } } },
+        },
+        responses: {
+          200: { description: "Products moved from di_collecting to di_toko and linked to this store; variant stock totals were increased." },
+          400: { description: "A barcode is invalid, is not in di_collecting status, has no variant, or belongs to another branch." },
+          403: { description: "Only Collecting accounts with store visit access can move products into a store." },
+          404: { description: "Store not found." },
+        },
+      },
+    },
+    "/api/store-stock/{storeId}/visit/stock/{variantId}": {
+      patch: {
+        operationId: "adjustVisitStoreStock",
+        summary: "Adjust a variant stock total during a store visit",
+        tags: ["Store stock"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "storeId", in: "path", required: true, schema: { type: "integer" } },
+          { name: "variantId", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["direction", "quantity"],
+            properties: {
+              direction: { type: "string", enum: ["increase", "decrease"] },
+              quantity: { type: "integer", minimum: 1 },
+            },
+          } } },
+        },
+        responses: {
+          200: { description: "Store variant stock total was adjusted." },
+          400: { description: "Invalid variant, quantity, or insufficient stock." },
+          403: { description: "Only Collecting accounts with store visit access can adjust stock from this endpoint." },
+          404: { description: "Store or variant not found in the user's assigned branch." },
+        },
+      },
+    },
+    "/api/store-stock/{storeId}/visit/status": {
+      patch: {
+        operationId: "updateVisitProductStatus",
+        summary: "Change a barcode product's status during a store visit",
+        tags: ["Store stock"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "storeId", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["barcode", "status"],
+            properties: {
+              barcode: { type: "string", maxLength: 120 },
+              status: { type: "string", enum: ["di_collecting", "terjual", "rusak"] },
+            },
+          } } },
+        },
+        responses: {
+          200: { description: "Product status changed and this store's matching variant stock was reduced by one. Unassigned legacy di_toko products can be updated after scanning their barcode at this store." },
+          400: { description: "The requested status or product is invalid." },
+          403: { description: "Only Collecting accounts with store visit access can update product status." },
+          404: { description: "Tracked product not found at this store." },
+          409: { description: "The aggregate stock does not match the tracked product." },
+        },
+      },
+    },
     "/api/products": {
       get: {
         operationId: "listProducts",
@@ -714,6 +811,55 @@ const openapiSpec = {
         security: [{ bearerAuth: [] }],
         parameters: paginationParameters,
         responses: { 200: { description: "Branch identifiers and names, returned as a backend-paginated page (default 50)." }, 403: { description: "The account does not have inventory access." } },
+      },
+    },
+    "/api/products/dashboard-summary": {
+      get: {
+        operationId: "getOperationalDashboardSummary",
+        summary: "Get status counts for the authenticated SPG, warehouse, or Collecting branch",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Product status counts scoped to the user's assigned branch, plus role and branch context." },
+          403: { description: "The account is not an operational role with overview access." },
+        },
+      },
+    },
+    "/api/products/pickup": {
+      get: {
+        operationId: "listPickupProducts",
+        summary: "List warehouse products available for SPG or Collecting pickup",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "search", in: "query", description: "Match a barcode or variant name.", schema: { type: "string" } },
+          ...paginationParameters,
+        ],
+        responses: {
+          200: { description: "Only products in di_gudang status, returned with pagination metadata." },
+          403: { description: "Only SPG and Collecting roles can use this endpoint." },
+        },
+      },
+      post: {
+        operationId: "pickWarehouseProducts",
+        summary: "Move warehouse products to the current user's SPG or Collecting stock",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["barcodes"],
+            properties: {
+              barcodes: { type: "array", minItems: 1, maxItems: 500, items: { type: "string", maxLength: 120 } },
+            },
+          } } },
+        },
+        responses: {
+          200: { description: "Products were moved from di_gudang to di_spg for SPG, or di_collecting for Collecting." },
+          400: { description: "A barcode was not found, duplicated, or is no longer in di_gudang status." },
+          403: { description: "Only SPG and Collecting roles can use this endpoint." },
+        },
       },
     },
     "/api/products/generate": {
@@ -1062,11 +1208,13 @@ const openapiSpec = {
       },
       User: {
         type: "object",
-        required: ["id", "username", "role", "isActive", "createdAt"],
+        required: ["id", "username", "role", "branchId", "isActive", "createdAt"],
         properties: {
           id: { type: "integer", example: 1 },
           username: { type: "string", example: "admin" },
           role: { $ref: "#/components/schemas/UserRole" },
+          branchId: { type: "integer", nullable: true, example: 1 },
+          branch: { type: "string", nullable: true, example: "Jakarta Selatan" },
           permissions: { $ref: "#/components/schemas/FeaturePermissions" },
           isActive: { type: "boolean", example: true },
           createdAt: { type: "string", format: "date-time" },

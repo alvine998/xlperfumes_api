@@ -7,6 +7,7 @@ const Variant = require("../models/variant");
 const ActivityLog = require("../models/activity-log");
 const logActivity = require("../middleware/activity-log");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
+const { assignedBranchId } = require("../utils/user-branch");
 
 const STATUSES = new Set(["pending", "di_gudang", "di_toko", "di_spg", "di_collecting", "terjual", "rusak"]);
 
@@ -15,6 +16,7 @@ function publicProduct(product) {
     id: product.id,
     barcode: product.barcode,
     branchId: product.branchId,
+    storeId: product.storeId ?? null,
     branch: product.branchRecord?.name ?? "—",
     variantId: product.variantId,
     variantName: product.variantRecord?.name ?? null,
@@ -47,7 +49,12 @@ function parseDate(value, endOfDay = false) {
 
 async function listProductBranches(req, res) {
   const pagination = paginationFromQuery(req.query);
-  const options = { attributes: ["id", "name"], order: [["name", "ASC"]] };
+  const branchId = assignedBranchId(req);
+  const options = {
+    attributes: ["id", "name"],
+    where: branchId === null ? {} : { id: branchId },
+    order: [["name", "ASC"]],
+  };
   const result = pagination
     ? await Branch.findAndCountAll({ ...options, limit: pagination.limit, offset: pagination.offset })
     : { rows: await Branch.findAll(options), count: null };
@@ -78,6 +85,8 @@ async function listProducts(req, res) {
     if (typeof branchId !== "string" || !/^\d+$/.test(branchId)) return res.status(400).json({ error: "Cabang tidak valid." });
     where.branchId = Number(branchId);
   }
+  const assignedId = assignedBranchId(req);
+  if (assignedId !== null) where.branchId = assignedId;
   if (variantId !== undefined) {
     if (typeof variantId !== "string" || !/^\d+$/.test(variantId)) {
       return res.status(400).json({ error: "Varian tidak valid." });
@@ -135,8 +144,67 @@ async function listProducts(req, res) {
   res.json(payload);
 }
 
+async function listPickupProducts(req, res) {
+  const { search } = req.query;
+  if (search !== undefined && typeof search !== "string") {
+    return res.status(400).json({ error: "Kata pencarian tidak valid." });
+  }
+
+  const where = { status: "di_gudang" };
+  const branchId = assignedBranchId(req);
+  if (branchId !== null) where.branchId = branchId;
+  const normalizedSearch = search?.trim();
+  if (normalizedSearch) {
+    const query = `%${normalizedSearch.replace(/[\\%_]/g, "\\$&")}%`;
+    where[Op.or] = [
+      { barcode: { [Op.like]: query } },
+      { "$variantRecord.name$": { [Op.like]: query } },
+    ];
+  }
+
+  const pagination = paginationFromQuery(req.query);
+  const result = await Product.findAndCountAll({
+    where,
+    include: productIncludes(),
+    distinct: true,
+    order: [["updatedAt", "DESC"], ["id", "DESC"]],
+    limit: pagination.limit,
+    offset: pagination.offset,
+  });
+  res.json({
+    products: result.rows.map(publicProduct),
+    pagination: paginationMetadata(pagination, result.count),
+  });
+}
+
+async function getOperationalDashboardSummary(req, res) {
+  const branchId = assignedBranchId(req);
+  const where = branchId === null ? {} : { branchId };
+  const [rows, branch] = await Promise.all([
+    Product.findAll({
+      attributes: ["status", [sequelize.fn("COUNT", sequelize.col("id")), "count"]],
+      where,
+      group: ["status"],
+      raw: true,
+    }),
+    branchId === null ? Promise.resolve(null) : Branch.findByPk(branchId, { attributes: ["name"] }),
+  ]);
+
+  const statusCounts = Object.fromEntries([...STATUSES].map((status) => [status, 0]));
+  for (const row of rows) {
+    if (Object.hasOwn(statusCounts, row.status)) statusCounts[row.status] = Number(row.count) || 0;
+  }
+
+  res.json({
+    role: req.user.role,
+    branchId,
+    branch: branch?.name ?? null,
+    statusCounts,
+  });
+}
+
 async function generateProducts(req, res) {
-  const branchId = Number(req.body?.branchId);
+  const branchId = assignedBranchId(req) ?? Number(req.body?.branchId);
   const variantId = Number(req.body?.variantId);
   const quantity = Number(req.body?.quantity);
   if (!Number.isInteger(branchId) || branchId < 1 ||
@@ -216,9 +284,10 @@ async function moveWarehouseProducts(req, res) {
   }
   const fromStatus = direction === "in" ? "pending" : "di_gudang";
   const toStatus = direction === "in" ? "di_gudang" : "di_toko";
+  const branchId = assignedBranchId(req);
   const result = await sequelize.transaction(async (transaction) => {
     const products = await Product.findAll({
-      where: { barcode: normalized },
+      where: { barcode: normalized, ...(branchId === null ? {} : { branchId }) },
       include: productIncludes(),
       transaction,
       lock: transaction.LOCK.UPDATE,
@@ -256,8 +325,69 @@ async function moveWarehouseProducts(req, res) {
   res.json({ products: result.products.map(publicProduct) });
 }
 
+async function pickWarehouseProducts(req, res) {
+  const barcodes = req.body?.barcodes;
+  if (!Array.isArray(barcodes) || barcodes.length === 0 || barcodes.length > 500 ||
+    barcodes.some((barcode) => typeof barcode !== "string" || !barcode.trim() || barcode.length > 120)) {
+    return res.status(400).json({ error: "Daftar kode barcode yang valid wajib diisi (maksimal 500 barang)." });
+  }
+
+  const normalized = barcodes.map((barcode) => barcode.trim());
+  if (new Set(normalized).size !== normalized.length) {
+    return res.status(400).json({ error: "Kode barcode yang sama tidak boleh dimasukkan lebih dari sekali." });
+  }
+
+  const statusByRole = { spg: "di_spg", collecting: "di_collecting" };
+  const toStatus = statusByRole[req.user?.role];
+  if (!toStatus) return res.status(403).json({ error: "Fitur ini hanya tersedia untuk pengguna SPG atau Collecting." });
+
+  const branchId = assignedBranchId(req);
+  const result = await sequelize.transaction(async (transaction) => {
+    const products = await Product.findAll({
+      where: { barcode: normalized, ...(branchId === null ? {} : { branchId }) },
+      include: productIncludes(),
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    const byBarcode = new Map(products.map((product) => [product.barcode, product]));
+    const missing = normalized.filter((barcode) => !byBarcode.has(barcode));
+    if (missing.length) return { invalid: `Kode QR tidak ditemukan: ${missing.join(", ")}` };
+
+    const unavailable = products.filter((product) => product.status !== "di_gudang");
+    if (unavailable.length) {
+      return { invalid: `Barang tidak lagi tersedia di gudang: ${unavailable.map((product) => `${product.barcode} (${product.status})`).join(", ")}` };
+    }
+
+    for (const product of products) {
+      product.status = toStatus;
+      await product.save({ transaction });
+    }
+    return { products: normalized.map((barcode) => byBarcode.get(barcode)) };
+  });
+
+  if (result.invalid) return res.status(400).json({ error: result.invalid });
+  for (const product of result.products) {
+    await logActivity(req, {
+      action: "update",
+      entityType: "product",
+      entityId: product.id,
+      details: {
+        barcode: product.barcode,
+        variantId: product.variantId,
+        variantName: product.variantRecord?.name ?? null,
+        fromStatus: "di_gudang",
+        toStatus,
+        branch: product.branchRecord?.name ?? "—",
+      },
+    });
+  }
+  res.json({ count: result.products.length, products: result.products.map(publicProduct) });
+}
+
 async function getProduct(req, res) {
-  const product = await Product.findByPk(req.params.id, {
+  const branchId = assignedBranchId(req);
+  const product = await Product.findOne({
+    where: { id: req.params.id, ...(branchId === null ? {} : { branchId }) },
     include: productIncludes(),
   });
   if (!product) return res.status(404).json({ error: "Produk tidak ditemukan." });
@@ -292,7 +422,9 @@ async function getProduct(req, res) {
 }
 
 async function deleteProduct(req, res) {
-  const product = await Product.findByPk(req.params.id, {
+  const branchId = assignedBranchId(req);
+  const product = await Product.findOne({
+    where: { id: req.params.id, ...(branchId === null ? {} : { branchId }) },
     include: [{ model: Variant, as: "variantRecord", attributes: ["name"] }],
   });
   if (!product) return res.status(404).json({ error: "Produk tidak ditemukan." });
@@ -312,4 +444,14 @@ async function deleteProduct(req, res) {
   res.status(204).end();
 }
 
-module.exports = { deleteProduct, generateProducts, getProduct, listProductBranches, listProducts, moveWarehouseProducts };
+module.exports = {
+  deleteProduct,
+  generateProducts,
+  getProduct,
+  getOperationalDashboardSummary,
+  listPickupProducts,
+  listProductBranches,
+  listProducts,
+  moveWarehouseProducts,
+  pickWarehouseProducts,
+};

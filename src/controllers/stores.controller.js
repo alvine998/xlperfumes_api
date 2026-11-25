@@ -5,6 +5,7 @@ const StoreZona = require("../models/store-zona");
 const logActivity = require("../middleware/activity-log");
 const { Op } = require("sequelize");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
+const { assignedBranchId } = require("../utils/user-branch");
 
 function publicStore(store, assignment = null) {
   return {
@@ -55,11 +56,14 @@ async function listStores(req, res) {
   } = req.query;
   const pagination = paginationFromQuery(req.query);
   const where = {};
+  const assignedId = assignedBranchId(req);
   if (typeof storeName === "string" && storeName.trim()) {
     const search = storeName.trim().replace(/[\\%_]/g, "\\$&");
     where.name = { [Op.like]: `%${search}%` };
   }
-  if (typeof branch === "string" && branch.trim() && branch !== "all") {
+  if (assignedId !== null) {
+    where.branchId = assignedId;
+  } else if (typeof branch === "string" && branch.trim() && branch !== "all") {
     where.branch = branch.trim();
   }
   if (startDate || endDate) {
@@ -108,9 +112,13 @@ async function createStore(req, res) {
       error: "Penempatan toko ke zona hanya dapat diatur dari detail zona.",
     });
   }
+  const assignedId = assignedBranchId(req);
   let branch = null;
-  if (body.branchId !== undefined && body.branchId !== null) {
-    const branchId = Number(body.branchId);
+  const selectedBranchId = assignedId ?? (body.branchId === undefined || body.branchId === null
+    ? null
+    : Number(body.branchId));
+  if (selectedBranchId !== null) {
+    const branchId = selectedBranchId;
     if (!Number.isInteger(branchId) || branchId < 1) {
       return res.status(400).json({ error: "Cabang tidak valid." });
     }
@@ -141,7 +149,9 @@ async function createStore(req, res) {
 }
 
 async function updateStore(req, res) {
-  const store = await Store.findByPk(req.params.id, {
+  const assignedId = assignedBranchId(req);
+  const store = await Store.findOne({
+    where: { id: req.params.id, ...(assignedId === null ? {} : { branchId: assignedId }) },
     include: [
       { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
     ],
@@ -154,7 +164,11 @@ async function updateStore(req, res) {
     return res.status(400).json({ error: "Data toko atau pin lokasi tidak valid." });
   }
 
-  const updated = { ...store.toJSON(), ...body };
+  const updated = {
+    ...store.toJSON(),
+    ...body,
+    ...(assignedId === null ? {} : { branchId: assignedId }),
+  };
   let branch = null;
   if (updated.branchId !== undefined && updated.branchId !== null) {
     const branchId = Number(updated.branchId);
@@ -196,7 +210,10 @@ async function updateStore(req, res) {
 }
 
 async function deleteStore(req, res) {
-  const store = await Store.findByPk(req.params.id);
+  const assignedId = assignedBranchId(req);
+  const store = await Store.findOne({
+    where: { id: req.params.id, ...(assignedId === null ? {} : { branchId: assignedId }) },
+  });
   if (!store) return res.status(404).json({ error: "Toko tidak ditemukan." });
   const deletedStore = { id: store.id, name: store.name, branch: store.branch };
   await store.destroy();

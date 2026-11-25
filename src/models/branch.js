@@ -35,5 +35,6 @@ const Branch = sequelize.define("Branch", {
 });
 
 Branch.belongsTo(User, { as: "creator", foreignKey: "createdBy" });
+User.belongsTo(Branch, { as: "branchRecord", foreignKey: "branchId" });
 
 module.exports = Branch;

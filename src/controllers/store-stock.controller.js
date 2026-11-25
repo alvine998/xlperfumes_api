@@ -1,3 +1,4 @@
+const { Op } = require("sequelize");
 const Store = require("../models/store");
 const StoreStock = require("../models/store-stock");
 const Variant = require("../models/variant");
@@ -5,6 +6,7 @@ const User = require("../models/user");
 const Product = require("../models/product");
 const sequelize = require("../config/database");
 const logActivity = require("../middleware/activity-log");
+const { assignedBranchId } = require("../utils/user-branch");
 
 const MAX_STORE_STOCK_PAGE_LIMIT = 100;
 
@@ -24,6 +26,21 @@ function publicStock(store, variant, stock) {
       ? { id: stock.updater.id, username: stock.updater.username }
       : null,
   };
+}
+
+function publicVisitProduct(product) {
+  return {
+    id: product.id,
+    barcode: product.barcode,
+    storeId: product.storeId ?? null,
+    variantId: product.variantId,
+    variantName: product.variantRecord?.name ?? null,
+    status: product.status,
+  };
+}
+
+function productIncludes() {
+  return [{ model: Variant, as: "variantRecord", attributes: ["id", "name", "branchId"] }];
 }
 
 function positiveInteger(value, fallback, max = Number.MAX_SAFE_INTEGER) {
@@ -52,9 +69,16 @@ async function listStoreStock(req, res) {
     return res.status(400).json({ error: "Rentang tanggal tidak valid." });
   }
 
+  const assignedId = assignedBranchId(req);
   const [stores, variants, stocks] = await Promise.all([
-    Store.findAll({ order: [["createdAt", "DESC"]] }),
-    Variant.findAll({ order: [["createdAt", "DESC"]] }),
+    Store.findAll({
+      where: assignedId === null ? {} : { branchId: assignedId },
+      order: [["createdAt", "DESC"]],
+    }),
+    Variant.findAll({
+      where: assignedId === null ? {} : { branchId: assignedId },
+      order: [["createdAt", "DESC"]],
+    }),
     StoreStock.findAll({
       include: [{ model: User, as: "updater", attributes: ["id", "username"] }],
     }),
@@ -74,7 +98,9 @@ async function listStoreStock(req, res) {
   const search = typeof req.query.search === "string"
     ? req.query.search.trim().toLocaleLowerCase("id-ID")
     : "";
-  const branch = typeof req.query.branch === "string" ? req.query.branch.trim() : "";
+  const branch = assignedId !== null
+    ? ""
+    : typeof req.query.branch === "string" ? req.query.branch.trim() : "";
   const sortOrder = req.query.sortOrder === "oldest" ? "oldest" : "newest";
   const startTimestamp = startDate
     ? new Date(`${startDate}T00:00:00.000+07:00`).getTime()
@@ -140,6 +166,48 @@ async function listStoreStock(req, res) {
   });
 }
 
+async function getVisitStoreStock(req, res) {
+  const storeId = Number(req.params.storeId);
+  if (!Number.isSafeInteger(storeId) || storeId < 1) {
+    return res.status(400).json({ error: "Toko tidak valid." });
+  }
+
+  const assignedId = assignedBranchId(req);
+  const store = await Store.findOne({
+    where: { id: storeId, ...(assignedId === null ? {} : { branchId: assignedId }) },
+  });
+  if (!store) return res.status(404).json({ error: "Toko tidak ditemukan." });
+
+  const [variants, stocks, products] = await Promise.all([
+    Variant.findAll({
+      where: store.branchId === null ? {} : { branchId: store.branchId },
+      order: [["name", "ASC"]],
+    }),
+    StoreStock.findAll({
+      where: { storeId },
+      include: [{ model: User, as: "updater", attributes: ["id", "username"] }],
+    }),
+    Product.findAll({
+      where: { storeId, status: "di_toko" },
+      include: productIncludes(),
+      order: [["updatedAt", "DESC"], ["id", "DESC"]],
+    }),
+  ]);
+  const stockByVariant = new Map(stocks.map((stock) => [stock.variantId, stock]));
+  const compatibleVariants = variants.filter((variant) =>
+    !store.branchId || !variant.branchId || store.branchId === variant.branchId,
+  );
+
+  res.json({
+    store: { id: store.id, name: store.name, branch: store.branch },
+    stocks: compatibleVariants.map((variant) =>
+      publicStock(store, variant, stockByVariant.get(variant.id) ?? null),
+    ),
+    products: products.map(publicVisitProduct),
+    canManageProducts: req.user?.role === "collecting",
+  });
+}
+
 async function adjustStoreStock(req, res) {
   const storeId = Number(req.params.storeId);
   const variantId = Number(req.params.variantId);
@@ -153,10 +221,19 @@ async function adjustStoreStock(req, res) {
     return res.status(400).json({ error: "Toko, varian, arah penyesuaian, dan jumlah unit yang valid wajib diisi." });
   }
 
+  const assignedId = assignedBranchId(req);
   const result = await sequelize.transaction(async (transaction) => {
     const [store, variant] = await Promise.all([
-      Store.findByPk(storeId, { transaction }),
-      Variant.findByPk(variantId, { transaction }),
+      Store.findOne({
+        where: { id: storeId, ...(assignedId === null ? {} : { branchId: assignedId }) },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      }),
+      Variant.findOne({
+        where: { id: variantId, ...(assignedId === null ? {} : { branchId: assignedId }) },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      }),
     ]);
     if (!store || !variant) return null;
     if (store.branchId && variant.branchId && store.branchId !== variant.branchId) {
@@ -173,6 +250,13 @@ async function adjustStoreStock(req, res) {
     const nextStock = Number(stock.totalStock) + delta;
     if (nextStock < 0) return { insufficient: true };
     if (nextStock > 4294967295) return { overflow: true };
+    if (direction === "decrease") {
+      const linkedProducts = await Product.count({
+        where: { storeId, variantId, status: "di_toko" },
+        transaction,
+      });
+      if (nextStock < linkedProducts) return { linkedProductsExceed: true, linkedProducts };
+    }
 
     stock.totalStock = nextStock;
     stock.updatedBy = req.user.id;
@@ -184,6 +268,9 @@ async function adjustStoreStock(req, res) {
   if (result.variantBranchMismatch) return res.status(400).json({ error: "Varian bukan milik cabang toko ini." });
   if (result.insufficient) return res.status(400).json({ error: "Jumlah pengurangan melebihi stok yang tersedia." });
   if (result.overflow) return res.status(400).json({ error: "Jumlah stok melebihi batas maksimum." });
+  if (result.linkedProductsExceed) {
+    return res.status(400).json({ error: `Stok tidak dapat dikurangi di bawah jumlah produk berbarcode yang tercatat (${result.linkedProducts} pcs).` });
+  }
 
   await logActivity(req, {
     action: "update",
@@ -225,11 +312,19 @@ async function receiveStoreStock(req, res) {
     seenVariants.add(Number(item.variantId));
   }
 
+  const assignedId = assignedBranchId(req);
   const result = await sequelize.transaction(async (transaction) => {
-    const store = await Store.findByPk(storeId, { transaction, lock: transaction.LOCK.UPDATE });
+    const store = await Store.findOne({
+      where: { id: storeId, ...(assignedId === null ? {} : { branchId: assignedId }) },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
     if (!store) return { notFound: true };
     const variants = await Variant.findAll({
-      where: { id: [...seenVariants] },
+      where: {
+        id: [...seenVariants],
+        ...(assignedId === null ? {} : { branchId: assignedId }),
+      },
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
@@ -274,7 +369,7 @@ async function receiveStoreStock(req, res) {
       stock.updatedBy = req.user.id;
       await stock.save({ transaction });
       await Product.update(
-        { status: "di_toko" },
+        { status: "di_toko", storeId: store.id },
         { where: { id: products.map((product) => product.id) }, transaction },
       );
       updated.push({ store, variant, stock, quantity, notes: item.notes?.trim() || "Dari Gudang" });
@@ -322,4 +417,230 @@ async function receiveStoreStock(req, res) {
   res.json({ stocks });
 }
 
-module.exports = { listStoreStock, adjustStoreStock, receiveStoreStock };
+async function receiveVisitProducts(req, res) {
+  const storeId = Number(req.params.storeId);
+  const barcodes = req.body?.barcodes;
+  if (!Number.isSafeInteger(storeId) || storeId < 1 || !Array.isArray(barcodes) ||
+    barcodes.length === 0 || barcodes.length > 500 ||
+    barcodes.some((barcode) => typeof barcode !== "string" || !barcode.trim() || barcode.length > 120)) {
+    return res.status(400).json({ error: "Daftar kode QR yang valid wajib diisi (maksimal 500 produk)." });
+  }
+  const normalized = barcodes.map((barcode) => barcode.trim());
+  if (new Set(normalized).size !== normalized.length) {
+    return res.status(400).json({ error: "Kode QR yang sama tidak boleh dimasukkan lebih dari sekali." });
+  }
+
+  const assignedId = assignedBranchId(req);
+  const result = await sequelize.transaction(async (transaction) => {
+    const store = await Store.findOne({
+      where: { id: storeId, ...(assignedId === null ? {} : { branchId: assignedId }) },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!store) return { notFound: true };
+
+    const products = await Product.findAll({
+      where: { barcode: normalized, ...(assignedId === null ? {} : { branchId: assignedId }) },
+      include: productIncludes(),
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    const byBarcode = new Map(products.map((product) => [product.barcode, product]));
+    const missing = normalized.filter((barcode) => !byBarcode.has(barcode));
+    if (missing.length) return { missing };
+    const unavailable = products.filter((product) =>
+      product.status !== "di_collecting" || product.storeId !== null,
+    );
+    if (unavailable.length) return { unavailable };
+    const withoutVariant = products.find((product) => !product.variantId || !product.variantRecord);
+    if (withoutVariant) return { withoutVariant };
+    const outsideStoreBranch = products.find((product) =>
+      store.branchId && product.branchId !== store.branchId,
+    );
+    if (outsideStoreBranch) return { outsideStoreBranch };
+    const mismatchedVariant = products.find((product) =>
+      store.branchId && product.variantRecord.branchId && product.variantRecord.branchId !== store.branchId,
+    );
+    if (mismatchedVariant) return { mismatchedVariant };
+
+    const quantities = new Map();
+    for (const product of products) {
+      quantities.set(product.variantId, (quantities.get(product.variantId) ?? 0) + 1);
+    }
+    const updatedStocks = [];
+    for (const [variantId, quantity] of quantities) {
+      const variant = products.find((product) => product.variantId === variantId)?.variantRecord;
+      if (!variant) return { withoutVariant: true };
+      const stock = await StoreStock.findOne({
+        where: { storeId, variantId },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      }) || await StoreStock.create({ storeId, variantId, totalStock: 0 }, { transaction });
+      const nextStock = Number(stock.totalStock) + quantity;
+      if (nextStock > 4294967295) return { overflow: true, variantName: variant.name };
+      stock.totalStock = nextStock;
+      stock.updatedBy = req.user.id;
+      await stock.save({ transaction });
+      updatedStocks.push({ stock, variant, quantity });
+    }
+
+    await Product.update(
+      { status: "di_toko", storeId },
+      { where: { id: products.map((product) => product.id) }, transaction },
+    );
+    const updatedProducts = await Product.findAll({
+      where: { id: products.map((product) => product.id) },
+      include: productIncludes(),
+      transaction,
+    });
+    return { store, updatedStocks, products: updatedProducts };
+  });
+
+  if (result.notFound) return res.status(404).json({ error: "Toko tidak ditemukan." });
+  if (result.missing) return res.status(400).json({ error: `Kode QR tidak ditemukan: ${result.missing.join(", ")}` });
+  if (result.unavailable) {
+    return res.status(400).json({
+      error: `Produk harus berstatus Di Collecting sebelum dimasukkan ke toko: ${result.unavailable.map((product) => `${product.barcode} (${product.status})`).join(", ")}`,
+    });
+  }
+  if (result.withoutVariant) return res.status(400).json({ error: "Varian produk belum terhubung, sehingga stok toko tidak dapat dihitung." });
+  if (result.outsideStoreBranch) return res.status(400).json({ error: "Produk berasal dari cabang yang berbeda dengan toko ini." });
+  if (result.mismatchedVariant) return res.status(400).json({ error: `Varian ${result.mismatchedVariant.variantRecord.name} bukan milik cabang toko ini.` });
+  if (result.overflow) return res.status(400).json({ error: `Jumlah stok ${result.variantName} melebihi batas maksimum.` });
+
+  for (const product of result.products) {
+    await logActivity(req, {
+      action: "update",
+      entityType: "product",
+      entityId: product.id,
+      details: {
+        barcode: product.barcode,
+        variantId: product.variantId,
+        variantName: product.variantRecord?.name ?? null,
+        fromStatus: "di_collecting",
+        toStatus: "di_toko",
+        storeId: result.store.id,
+        storeName: result.store.name,
+        branch: result.store.branch,
+      },
+    });
+  }
+  for (const entry of result.updatedStocks) {
+    await logActivity(req, {
+      action: "update",
+      entityType: "store_stock",
+      entityId: `${result.store.id}:${entry.variant.id}`,
+      details: {
+        name: result.store.name,
+        branch: result.store.branch,
+        variantId: entry.variant.id,
+        variantName: entry.variant.name,
+        direction: "increase",
+        quantity: entry.quantity,
+        totalStock: entry.stock.totalStock,
+        updatedBy: req.user.username,
+      },
+    });
+  }
+  res.json({ products: result.products.map(publicVisitProduct) });
+}
+
+async function updateVisitProductStatus(req, res) {
+  const storeId = Number(req.params.storeId);
+  const barcode = typeof req.body?.barcode === "string" ? req.body.barcode.trim() : "";
+  const toStatus = req.body?.status;
+  if (!Number.isSafeInteger(storeId) || storeId < 1 || !barcode || barcode.length > 120 ||
+    !["di_collecting", "terjual", "rusak"].includes(toStatus)) {
+    return res.status(400).json({ error: "Toko, kode QR produk, dan status tujuan tidak valid." });
+  }
+
+  const assignedId = assignedBranchId(req);
+  const result = await sequelize.transaction(async (transaction) => {
+    const store = await Store.findOne({
+      where: { id: storeId, ...(assignedId === null ? {} : { branchId: assignedId }) },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!store) return { storeNotFound: true };
+    const product = await Product.findOne({
+      where: {
+        barcode,
+        [Op.or]: [{ storeId }, { storeId: null }],
+        status: "di_toko",
+        ...(assignedId === null ? {} : { branchId: assignedId }),
+      },
+      include: productIncludes(),
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!product) return { productNotFound: true };
+    if (!product.variantId || !product.variantRecord) return { withoutVariant: true };
+    if (store.branchId && product.branchId !== store.branchId) return { outsideStoreBranch: true };
+    if (store.branchId && product.variantRecord.branchId && product.variantRecord.branchId !== store.branchId) {
+      return { mismatchedVariant: true };
+    }
+
+    const stock = await StoreStock.findOne({
+      where: { storeId, variantId: product.variantId },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!stock || Number(stock.totalStock) < 1) return { stockMismatch: true };
+    const variant = product.variantRecord;
+    stock.totalStock = Number(stock.totalStock) - 1;
+    stock.updatedBy = req.user.id;
+    await stock.save({ transaction });
+    product.status = toStatus;
+    product.storeId = null;
+    await product.save({ transaction });
+    return { store, stock, variant, product };
+  });
+
+  if (result.storeNotFound) return res.status(404).json({ error: "Toko tidak ditemukan." });
+  if (result.productNotFound) return res.status(404).json({ error: "Produk berstatus Di Toko tidak ditemukan pada toko ini atau tercatat di toko lain." });
+  if (result.withoutVariant) return res.status(400).json({ error: "Varian produk belum terhubung, sehingga stok toko tidak dapat dikurangi." });
+  if (result.outsideStoreBranch) return res.status(400).json({ error: "Produk berasal dari cabang yang berbeda dengan toko ini." });
+  if (result.mismatchedVariant) return res.status(400).json({ error: "Varian produk bukan milik cabang toko ini." });
+  if (result.stockMismatch) return res.status(409).json({ error: "Jumlah stok varian ini tidak sesuai dengan produk yang tercatat di toko." });
+
+  await logActivity(req, {
+    action: "update",
+    entityType: "product",
+    entityId: result.product.id,
+    details: {
+      barcode: result.product.barcode,
+      variantId: result.product.variantId,
+      variantName: result.variant?.name ?? null,
+      fromStatus: "di_toko",
+      toStatus,
+      storeId: result.store.id,
+      storeName: result.store.name,
+      branch: result.store.branch,
+    },
+  });
+  await logActivity(req, {
+    action: "update",
+    entityType: "store_stock",
+    entityId: `${result.store.id}:${result.variant?.id}`,
+    details: {
+      name: result.store.name,
+      branch: result.store.branch,
+      variantId: result.variant?.id,
+      variantName: result.variant?.name ?? null,
+      direction: "decrease",
+      quantity: 1,
+      totalStock: result.stock.totalStock,
+      updatedBy: req.user.username,
+    },
+  });
+  res.json({ product: publicVisitProduct(result.product) });
+}
+
+module.exports = {
+  adjustStoreStock,
+  getVisitStoreStock,
+  listStoreStock,
+  receiveStoreStock,
+  receiveVisitProducts,
+  updateVisitProductStatus,
+};

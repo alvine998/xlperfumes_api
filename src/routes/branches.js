@@ -13,7 +13,7 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get("/", requirePermission([
-  "branchs", "zonas", "stores", "store_inventory", "warehouse_inventory", "store_visit", "print_store_barcodes",
+  "branchs", "zonas", "stores", "users", "store_inventory", "warehouse_inventory", "store_visit", "print_store_barcodes",
 ]), asyncHandler(listBranches));
 router.post("/", requirePermission("branchs"), asyncHandler(createBranch));
 router.patch("/:id", requirePermission("branchs"), asyncHandler(updateBranch));

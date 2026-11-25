@@ -4,6 +4,7 @@ const Branch = require("../models/branch");
 const Product = require("../models/product");
 const logActivity = require("../middleware/activity-log");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
+const { assignedBranchId } = require("../utils/user-branch");
 
 function publicVariant(variant) {
   return {
@@ -34,6 +35,8 @@ async function listVariants(req, res) {
     }
     where.branchId = Number(req.query.branchId);
   }
+  const branchId = assignedBranchId(req);
+  if (branchId !== null) where.branchId = branchId;
   if (typeof req.query.search === "string" && req.query.search.trim()) {
     const search = req.query.search.trim().replace(/[\\%_]/g, "\\$&");
     where.name = { [Op.like]: `%${search}%` };
@@ -54,10 +57,11 @@ async function listVariants(req, res) {
 
 async function createVariant(req, res) {
   const body = req.body ?? {};
-  if (!validVariant(body)) {
+  const branchId = assignedBranchId(req) ?? Number(body.branchId);
+  if (!validVariant({ ...body, branchId })) {
     return res.status(400).json({ error: "Nama varian, jumlah, satuan, harga satuan, dan cabang yang valid wajib diisi." });
   }
-  const branch = await Branch.findByPk(Number(body.branchId));
+  const branch = await Branch.findByPk(branchId);
   if (!branch) return res.status(404).json({ error: "Cabang tidak ditemukan." });
 
   const variant = await Variant.create({
@@ -65,7 +69,7 @@ async function createVariant(req, res) {
     quantity: Number(body.quantity),
     unit: body.unit.trim(),
     unitPrice: Number(body.unitPrice),
-    branchId: Number(body.branchId),
+    branchId,
   });
   const savedVariant = await Variant.findByPk(variant.id, {
     include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
@@ -80,19 +84,25 @@ async function createVariant(req, res) {
 }
 
 async function updateVariant(req, res) {
-  const variant = await Variant.findByPk(req.params.id, {
+  const assignedId = assignedBranchId(req);
+  const variant = await Variant.findOne({
+    where: { id: req.params.id, ...(assignedId === null ? {} : { branchId: assignedId }) },
     include: [{ model: Branch, as: "branchRecord", attributes: ["name"] }],
   });
   if (!variant) return res.status(404).json({ error: "Varian tidak ditemukan." });
 
   const body = req.body ?? {};
   const allowedFields = ["name", "quantity", "unit", "unitPrice", "branchId"];
+  const normalizedBody = {
+    ...body,
+    ...(assignedId === null ? {} : { branchId: assignedId }),
+  };
   if (Object.keys(body).some((field) => !allowedFields.includes(field)) ||
-    !validVariant({ ...variant.toJSON(), ...body })) {
+    !validVariant({ ...variant.toJSON(), ...normalizedBody })) {
     return res.status(400).json({ error: "Data varian tidak valid." });
   }
 
-  const branchId = Number(body.branchId ?? variant.branchId);
+  const branchId = assignedId ?? Number(body.branchId ?? variant.branchId);
   const branch = await Branch.findByPk(branchId);
   if (!branch) return res.status(404).json({ error: "Cabang tidak ditemukan." });
   if (branchId !== Number(variant.branchId)) {
@@ -126,7 +136,10 @@ async function updateVariant(req, res) {
 }
 
 async function deleteVariant(req, res) {
-  const variant = await Variant.findByPk(req.params.id);
+  const assignedId = assignedBranchId(req);
+  const variant = await Variant.findOne({
+    where: { id: req.params.id, ...(assignedId === null ? {} : { branchId: assignedId }) },
+  });
   if (!variant) return res.status(404).json({ error: "Varian tidak ditemukan." });
   if (await Product.count({ where: { variantId: variant.id } })) {
     return res.status(409).json({ error: "Varian tidak dapat dihapus karena masih digunakan oleh produk." });

@@ -8,6 +8,7 @@ const User = require("../models/user");
 const UserZona = require("../models/user-zona");
 const logActivity = require("../middleware/activity-log");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
+const { assignedBranchId } = require("../utils/user-branch");
 
 function publicZone(
   zone,
@@ -55,6 +56,13 @@ function isValidDetails(body) {
       (Number.isInteger(Number(userPicId)) && Number(userPicId) > 0));
 }
 
+function zoneWhere(req, id) {
+  const where = { id };
+  const branchId = assignedBranchId(req);
+  if (branchId !== null) where.branchId = branchId;
+  return where;
+}
+
 async function listZones(req, res) {
   const pagination = paginationFromQuery(req.query);
   const where = {};
@@ -64,6 +72,8 @@ async function listZones(req, res) {
     }
     where.branchId = Number(req.query.branchId);
   }
+  const branchId = assignedBranchId(req);
+  if (branchId !== null) where.branchId = branchId;
   if (typeof req.query.search === "string" && req.query.search.trim()) {
     const search = req.query.search.trim().replace(/[\\%_]/g, "\\$&");
     where[Op.or] = [
@@ -121,9 +131,14 @@ async function listZones(req, res) {
 
 async function listZoneCollectors(req, res) {
   const pagination = paginationFromQuery(req.query);
+  const branchId = assignedBranchId(req);
   const options = {
     attributes: ["id", "username"],
-    where: { role: "collecting", isActive: true },
+    where: {
+      role: "collecting",
+      isActive: true,
+      ...(branchId === null ? {} : { branchId }),
+    },
     order: [["username", "ASC"]],
   };
   const result = pagination
@@ -136,7 +151,8 @@ async function listZoneCollectors(req, res) {
 
 async function getZoneDetail(req, res) {
   const pagination = paginationFromQuery(req.query);
-  const zone = await Zone.findByPk(req.params.id, {
+  const zone = await Zone.findOne({
+    where: zoneWhere(req, req.params.id),
     include: [
       { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
       { model: User, as: "creator", attributes: ["id", "username"] },
@@ -223,15 +239,17 @@ async function getZoneDetail(req, res) {
 
 async function createZone(req, res) {
   const body = req.body ?? {};
+  const branchId = assignedBranchId(req) ?? Number(body.branchId);
+  const details = { ...body, branchId };
   const allowedFields = ["name", "branchId", "userPicId"];
   if (
     Object.keys(body).some((field) => !allowedFields.includes(field)) ||
-    !isValidDetails(body)
+    !isValidDetails(details)
   ) {
     return res.status(400).json({ error: "Nama zona dan cabang yang valid wajib diisi." });
   }
 
-  const branch = await Branch.findByPk(Number(body.branchId));
+  const branch = await Branch.findByPk(branchId);
   if (!branch) return res.status(400).json({ error: "Cabang tidak ditemukan." });
 
   let pic = null;
@@ -241,6 +259,7 @@ async function createZone(req, res) {
         id: Number(body.userPicId),
         role: "collecting",
         isActive: true,
+        ...(assignedBranchId(req) === null ? {} : { branchId: assignedBranchId(req) }),
       },
     });
     if (!pic) {
@@ -271,8 +290,10 @@ async function createZone(req, res) {
 
 async function updateZone(req, res) {
   const body = req.body ?? {};
+  const assignedId = assignedBranchId(req);
   const result = await sequelize.transaction(async (transaction) => {
-    const zone = await Zone.findByPk(req.params.id, {
+    const zone = await Zone.findOne({
+      where: zoneWhere(req, req.params.id),
       include: [
         { model: Branch, as: "branchRecord", attributes: ["id", "name"] },
         { model: User, as: "creator", attributes: ["id", "username"] },
@@ -295,7 +316,11 @@ async function updateZone(req, res) {
     }
 
     const allowedFields = ["name", "branchId", "userPicId"];
-    const updated = { ...zone.toJSON(), ...body };
+    const updated = {
+      ...zone.toJSON(),
+      ...body,
+      ...(assignedId === null ? {} : { branchId: assignedId }),
+    };
     if (
       Object.keys(body).some((field) => !allowedFields.includes(field)) ||
       !isValidDetails(updated)
@@ -313,6 +338,7 @@ async function updateZone(req, res) {
           id: Number(updated.userPicId),
           role: "collecting",
           isActive: true,
+          ...(assignedId === null ? {} : { branchId: assignedId }),
         },
         transaction,
       });
@@ -349,7 +375,10 @@ async function updateZone(req, res) {
 }
 
 async function getZoneUsers(req, res) {
-  const zone = await Zone.findByPk(req.params.id, { attributes: ["id"] });
+  const zone = await Zone.findOne({
+    where: zoneWhere(req, req.params.id),
+    attributes: ["id"],
+  });
   if (!zone) return res.status(404).json({ error: "Zona tidak ditemukan." });
 
   const pagination = paginationFromQuery(req.query);
@@ -387,8 +416,10 @@ async function updateZoneUsers(req, res) {
     return res.status(400).json({ error: "Daftar pengguna zona tidak valid." });
   }
 
+  const assignedId = assignedBranchId(req);
   const result = await sequelize.transaction(async (transaction) => {
-    const zone = await Zone.findByPk(req.params.id, {
+    const zone = await Zone.findOne({
+      where: zoneWhere(req, req.params.id),
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
@@ -397,7 +428,12 @@ async function updateZoneUsers(req, res) {
     const [collectors, currentAssignments] = await Promise.all([
       User.findAll({
         attributes: ["id"],
-        where: { id: userIds, role: "collecting", isActive: true },
+        where: {
+          id: userIds,
+          role: "collecting",
+          isActive: true,
+          ...(assignedId === null ? {} : { branchId: assignedId }),
+        },
         transaction,
       }),
       UserZona.findAll({
@@ -464,7 +500,8 @@ async function updateZoneStoreOrder(req, res) {
   }
 
   const result = await sequelize.transaction(async (transaction) => {
-    const zone = await Zone.findByPk(req.params.id, {
+    const zone = await Zone.findOne({
+      where: zoneWhere(req, req.params.id),
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
@@ -516,7 +553,8 @@ async function updateZoneStoreOrder(req, res) {
 
 async function assignStoresToZone(req, storeIds) {
   const result = await sequelize.transaction(async (transaction) => {
-    const zone = await Zone.findByPk(req.params.id, {
+    const zone = await Zone.findOne({
+      where: zoneWhere(req, req.params.id),
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
@@ -633,7 +671,8 @@ async function removeZoneStore(req, res) {
   }
 
   const result = await sequelize.transaction(async (transaction) => {
-    const zone = await Zone.findByPk(req.params.id, {
+    const zone = await Zone.findOne({
+      where: zoneWhere(req, req.params.id),
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
@@ -674,7 +713,7 @@ async function removeZoneStore(req, res) {
 }
 
 async function deleteZone(req, res) {
-  const zone = await Zone.findByPk(req.params.id);
+  const zone = await Zone.findOne({ where: zoneWhere(req, req.params.id) });
   if (!zone) return res.status(404).json({ error: "Zona tidak ditemukan." });
 
   const storeCount = await StoreZona.count({ where: { zonaId: zone.id } });
