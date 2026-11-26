@@ -1,7 +1,7 @@
 const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
 const { authenticate, requirePermission, requireRole } = require("../middleware/permissions");
-const { deleteProduct, generateProducts, getOperationalDashboardSummary, getProduct, listPickupProducts, listProductBranches, listProducts, moveWarehouseProducts, pickWarehouseProducts } = require("../controllers/products.controller");
+const { deleteProduct, generateProducts, getOperationalDashboardSummary, getProduct, listPickupProducts, listProductBranches, listProducts, moveWarehouseProducts, pickWarehouseProducts, updateSoldProductStatus } = require("../controllers/products.controller");
 
 const router = express.Router();
 router.use(authenticate);
@@ -17,6 +17,7 @@ router.get("/", requirePermission([
   "products", "generate_product", "print_product_barcodes", "warehouse_inventory",
 ]), asyncHandler(listProducts));
 router.get("/:id", requirePermission("products"), asyncHandler(getProduct));
+router.patch("/:id/sales-status", requirePermission("products"), requireRole(["admin", "owner"]), asyncHandler(updateSoldProductStatus));
 router.delete("/:id", requirePermission("products"), asyncHandler(deleteProduct));
 
 module.exports = router;

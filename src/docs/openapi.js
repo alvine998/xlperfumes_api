@@ -326,6 +326,18 @@ const openapiSpec = {
         },
       },
     },
+    "/api/zones/my": {
+      get: {
+        operationId: "getMyZones",
+        summary: "Get the signed-in collecting or SPG user's assigned zones and stores",
+        tags: ["Zones"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Assigned zones and stores in each zone's saved route order." },
+          403: { description: "Collecting or SPG role and store visit access are required." },
+        },
+      },
+    },
     "/api/zones/collectors": {
       get: {
         operationId: "listZoneCollectors",
@@ -570,6 +582,20 @@ const openapiSpec = {
         responses: {
           201: { description: "Store created." },
           400: { description: "Invalid store data or unsupported zone assignment." },
+        },
+      },
+    },
+    "/api/stores/{id}/visit/check-in": {
+      post: {
+        operationId: "checkInStoreVisit",
+        summary: "Record a user check-in at a store",
+        tags: ["Stores"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: {
+          201: { description: "Visit check-in recorded in the activity log." },
+          403: { description: "The store is outside the collecting user's assigned zone." },
+          404: { description: "Store not found in the user's assigned branch." },
         },
       },
     },
@@ -931,6 +957,30 @@ const openapiSpec = {
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
         responses: { 204: { description: "Product deleted." }, 404: { description: "Product not found." } },
+      },
+    },
+    "/api/products/{id}/sales-status": {
+      patch: {
+        operationId: "updateSoldProductStatus",
+        summary: "Change the status of a sold product",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["status"],
+            properties: { status: { type: "string", enum: ["pending", "di_gudang", "di_toko", "di_spg", "di_collecting", "rusak"] } },
+          } } },
+        },
+        responses: {
+          200: { description: "Sold product status updated; returning it to di_toko restores its linked store stock total." },
+          400: { description: "Invalid target status." },
+          403: { description: "Only admins or owners with product access can change sold product status." },
+          404: { description: "Product not found." },
+          409: { description: "The product is no longer sold." },
+        },
       },
     },
     "/api/variants": {

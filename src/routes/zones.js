@@ -1,8 +1,9 @@
 const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
-const { authenticate, requirePermission } = require("../middleware/permissions");
+const { authenticate, requirePermission, requireRole } = require("../middleware/permissions");
 const {
   listZones,
+  getMyZones,
   getZoneDetail,
   listZoneCollectors,
   createZone,
@@ -18,7 +19,11 @@ const {
 
 const router = express.Router();
 
-router.use(authenticate, requirePermission("zonas"));
+router.use(authenticate);
+
+router.get("/my", requirePermission("store_visit"), requireRole(["collecting", "spg"]), asyncHandler(getMyZones));
+
+router.use(requirePermission("zonas"));
 
 router.get("/", asyncHandler(listZones));
 router.get("/collectors", asyncHandler(listZoneCollectors));

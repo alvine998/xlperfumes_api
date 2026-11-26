@@ -2,6 +2,7 @@ const Store = require("../models/store");
 const Branch = require("../models/branch");
 const Zone = require("../models/zone");
 const StoreZona = require("../models/store-zona");
+const UserZona = require("../models/user-zona");
 const logActivity = require("../middleware/activity-log");
 const { Op } = require("sequelize");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
@@ -57,6 +58,21 @@ async function listStores(req, res) {
   const pagination = paginationFromQuery(req.query);
   const where = {};
   const assignedId = assignedBranchId(req);
+  if (req.user?.role === "collecting") {
+    const userZones = await UserZona.findAll({
+      attributes: ["zonaId"],
+      where: { userId: req.user.id },
+    });
+    const zoneIds = userZones.map(({ zonaId }) => zonaId);
+    const assignments = zoneIds.length
+      ? await StoreZona.findAll({
+        attributes: ["storeId"],
+        where: { zonaId: { [Op.in]: zoneIds } },
+      })
+      : [];
+    const storeIds = [...new Set(assignments.map(({ storeId }) => storeId))];
+    where.id = { [Op.in]: storeIds };
+  }
   if (typeof storeName === "string" && storeName.trim()) {
     const search = storeName.trim().replace(/[\\%_]/g, "\\$&");
     where.name = { [Op.like]: `%${search}%` };
@@ -102,6 +118,48 @@ async function listStores(req, res) {
   };
   payload.pagination = paginationMetadata(pagination, count);
   res.json(payload);
+}
+
+async function checkInStoreVisit(req, res) {
+  const storeId = Number(req.params.id);
+  if (!Number.isSafeInteger(storeId) || storeId < 1) {
+    return res.status(400).json({ error: "Toko tidak valid." });
+  }
+  const assignedId = assignedBranchId(req);
+  const store = await Store.findOne({
+    where: { id: storeId, ...(assignedId === null ? {} : { branchId: assignedId }) },
+  });
+  if (!store) return res.status(404).json({ error: "Toko tidak ditemukan." });
+
+  if (req.user?.role === "collecting") {
+    const memberships = await UserZona.findAll({
+      attributes: ["zonaId"],
+      where: { userId: req.user.id },
+    });
+    const zoneIds = memberships.map(({ zonaId }) => zonaId);
+    const assignedStore = zoneIds.length ? await StoreZona.findOne({
+      attributes: ["storeId"],
+      where: { storeId, zonaId: { [Op.in]: zoneIds } },
+    }) : null;
+    if (!assignedStore) {
+      return res.status(403).json({ error: "Toko ini berada di luar zona yang ditugaskan kepada Anda." });
+    }
+  }
+
+  const visitedAt = new Date().toISOString();
+  await logActivity(req, {
+    action: "visit",
+    entityType: "store_visit",
+    entityId: store.id,
+    details: {
+      storeId: store.id,
+      storeName: store.name,
+      branch: store.branch,
+      eventType: "check_in",
+      visitedAt,
+    },
+  });
+  res.status(201).json({ visitedAt });
 }
 
 async function createStore(req, res) {
@@ -226,4 +284,4 @@ async function deleteStore(req, res) {
   res.status(204).end();
 }
 
-module.exports = { listStores, createStore, updateStore, deleteStore };
+module.exports = { listStores, checkInStoreVisit, createStore, updateStore, deleteStore };

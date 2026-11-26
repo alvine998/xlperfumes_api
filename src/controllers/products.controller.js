@@ -5,6 +5,7 @@ const Product = require("../models/product");
 const Branch = require("../models/branch");
 const Variant = require("../models/variant");
 const ActivityLog = require("../models/activity-log");
+const StoreStock = require("../models/store-stock");
 const logActivity = require("../middleware/activity-log");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 const { assignedBranchId } = require("../utils/user-branch");
@@ -421,6 +422,58 @@ async function getProduct(req, res) {
   res.json(payload);
 }
 
+async function updateSoldProductStatus(req, res) {
+  const toStatus = req.body?.status;
+  if (typeof toStatus !== "string" || !STATUSES.has(toStatus) || toStatus === "terjual") {
+    return res.status(400).json({ error: "Status tujuan tidak valid." });
+  }
+
+  const result = await sequelize.transaction(async (transaction) => {
+    const product = await Product.findByPk(req.params.id, {
+      include: productIncludes(),
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!product) return { notFound: true };
+    if (product.status !== "terjual") return { invalidStatus: true };
+
+    const fromStatus = product.status;
+    if (toStatus === "di_toko" && product.storeId && product.variantId) {
+      const [stock] = await StoreStock.findOrCreate({
+        where: { storeId: product.storeId, variantId: product.variantId },
+        defaults: { totalStock: 0, updatedBy: req.user?.id ?? null },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      stock.totalStock += 1;
+      stock.updatedBy = req.user?.id ?? null;
+      await stock.save({ transaction });
+    }
+
+    product.status = toStatus;
+    await product.save({ transaction });
+    return { product, fromStatus };
+  });
+
+  if (result.notFound) return res.status(404).json({ error: "Produk tidak ditemukan." });
+  if (result.invalidStatus) return res.status(409).json({ error: "Status produk sudah berubah. Muat ulang laporan." });
+
+  await logActivity(req, {
+    action: "update",
+    entityType: "product",
+    entityId: result.product.id,
+    details: {
+      barcode: result.product.barcode,
+      variantId: result.product.variantId,
+      variantName: result.product.variantRecord?.name ?? null,
+      fromStatus: result.fromStatus,
+      toStatus,
+      branch: result.product.branchRecord?.name ?? "—",
+    },
+  });
+  res.json({ product: publicProduct(result.product) });
+}
+
 async function deleteProduct(req, res) {
   const branchId = assignedBranchId(req);
   const product = await Product.findOne({
@@ -448,6 +501,7 @@ module.exports = {
   deleteProduct,
   generateProducts,
   getProduct,
+  updateSoldProductStatus,
   getOperationalDashboardSummary,
   listPickupProducts,
   listProductBranches,

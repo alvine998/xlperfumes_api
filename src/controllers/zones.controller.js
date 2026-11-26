@@ -6,6 +6,7 @@ const Store = require("../models/store");
 const StoreZona = require("../models/store-zona");
 const User = require("../models/user");
 const UserZona = require("../models/user-zona");
+const ActivityLog = require("../models/activity-log");
 const logActivity = require("../middleware/activity-log");
 const { paginationFromQuery, paginationMetadata } = require("../utils/pagination");
 const { assignedBranchId } = require("../utils/user-branch");
@@ -127,6 +128,105 @@ async function listZones(req, res) {
   };
   if (pagination) payload.pagination = paginationMetadata(pagination, zoneResult.count);
   res.json(payload);
+}
+
+async function getMyZones(req, res) {
+  const memberships = await UserZona.findAll({
+    attributes: ["zonaId"],
+    where: { userId: req.user.id },
+  });
+  const zoneIds = memberships.map(({ zonaId }) => zonaId);
+  if (zoneIds.length === 0) return res.json({ zones: [] });
+
+  const zones = await Zone.findAll({
+    where: { id: { [Op.in]: zoneIds } },
+    include: [{ model: Branch, as: "branchRecord", attributes: ["id", "name"] }],
+    order: [["name", "ASC"]],
+  });
+  const assignments = await StoreZona.findAll({
+    where: { zonaId: { [Op.in]: zoneIds } },
+    include: [{
+      model: Store,
+      as: "store",
+      include: [{ model: Branch, as: "branchRecord", attributes: ["id", "name"] }],
+    }],
+    order: [["routeIndex", "ASC"], ["storeId", "ASC"]],
+  });
+  const storeIds = [...new Set(assignments.map(({ storeId }) => storeId))];
+  const [visitLogs, itemUpdateLogs, legacyStockLogs, productLogs] = storeIds.length ? await Promise.all([
+    ActivityLog.findAll({
+      attributes: ["entityId", "username", "createdAt"],
+      where: {
+        action: "visit",
+        entityType: "store_visit",
+        entityId: { [Op.in]: storeIds.map(String) },
+      },
+      order: [["createdAt", "DESC"]],
+    }),
+    ActivityLog.findAll({
+      attributes: ["entityId", "username", "createdAt"],
+      where: {
+        action: "update",
+        entityType: "store_item_update",
+        entityId: { [Op.in]: storeIds.map(String) },
+      },
+      order: [["createdAt", "DESC"]],
+    }),
+    ActivityLog.findAll({
+      attributes: ["entityId", "username", "createdAt"],
+      where: {
+        action: "update",
+        entityType: "store_stock",
+        [Op.or]: storeIds.map((storeId) => ({ entityId: { [Op.like]: `${storeId}:%` } })),
+      },
+      order: [["createdAt", "DESC"]],
+    }),
+    ActivityLog.findAll({
+      attributes: ["username", "createdAt", "details"],
+      where: {
+        action: "update",
+        entityType: "product",
+        [Op.and]: [sequelize.where(sequelize.json("details.storeId"), { [Op.in]: storeIds })],
+      },
+      order: [["createdAt", "DESC"]],
+    }),
+  ]) : [[], [], [], []];
+  const latestVisitByStore = new Map();
+  for (const log of visitLogs) {
+    if (!latestVisitByStore.has(Number(log.entityId))) {
+      latestVisitByStore.set(Number(log.entityId), { username: log.username, at: log.createdAt });
+    }
+  }
+  const latestItemUpdateByStore = new Map();
+  const allItemUpdateLogs = [
+    ...itemUpdateLogs.map((log) => ({ storeId: Number(log.entityId), username: log.username, at: log.createdAt })),
+    ...legacyStockLogs.map((log) => ({ storeId: Number(log.entityId.split(":")[0]), username: log.username, at: log.createdAt })),
+    ...productLogs.map((log) => ({ storeId: Number(log.details?.storeId), username: log.username, at: log.createdAt })),
+  ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  for (const log of allItemUpdateLogs) {
+    if (Number.isSafeInteger(log.storeId) && !latestItemUpdateByStore.has(log.storeId)) {
+      latestItemUpdateByStore.set(log.storeId, { username: log.username, at: log.at });
+    }
+  }
+  const storesByZone = new Map();
+  for (const assignment of assignments) {
+    const stores = storesByZone.get(assignment.zonaId) ?? [];
+    stores.push({
+      ...publicZoneStore(assignment.store, assignment.routeIndex),
+      visitFlag: latestVisitByStore.get(assignment.storeId) ?? null,
+      itemUpdateFlag: latestItemUpdateByStore.get(assignment.storeId) ?? null,
+    });
+    storesByZone.set(assignment.zonaId, stores);
+  }
+
+  res.json({
+    zones: zones.map((zone) => ({
+      id: zone.id,
+      name: zone.name,
+      branch: zone.branchRecord?.name ?? null,
+      stores: storesByZone.get(zone.id) ?? [],
+    })),
+  });
 }
 
 async function listZoneCollectors(req, res) {
@@ -745,6 +845,7 @@ async function deleteZone(req, res) {
 
 module.exports = {
   listZones,
+  getMyZones,
   getZoneDetail,
   listZoneCollectors,
   createZone,

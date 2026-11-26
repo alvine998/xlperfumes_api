@@ -4,11 +4,48 @@ const StoreStock = require("../models/store-stock");
 const Variant = require("../models/variant");
 const User = require("../models/user");
 const Product = require("../models/product");
+const StoreZona = require("../models/store-zona");
+const UserZona = require("../models/user-zona");
 const sequelize = require("../config/database");
 const logActivity = require("../middleware/activity-log");
 const { assignedBranchId } = require("../utils/user-branch");
 
 const MAX_STORE_STOCK_PAGE_LIMIT = 100;
+
+async function isAssignedCollectingStore(userId, storeId, transaction) {
+  const assignments = await UserZona.findAll({
+    attributes: ["zonaId"],
+    where: { userId },
+    transaction,
+  });
+  const zoneIds = assignments.map(({ zonaId }) => zonaId);
+  if (zoneIds.length === 0) return false;
+  return Boolean(await StoreZona.findOne({
+    attributes: ["storeId"],
+    where: { storeId, zonaId: { [Op.in]: zoneIds } },
+    transaction,
+  }));
+}
+
+function hasAssignedZoneAccess(req, storeId, transaction) {
+  return req.user?.role === "collecting"
+    ? isAssignedCollectingStore(req.user.id, storeId, transaction)
+    : Promise.resolve(true);
+}
+
+async function logStoreItemUpdate(req, store, details) {
+  await logActivity(req, {
+    action: "update",
+    entityType: "store_item_update",
+    entityId: store.id,
+    details: {
+      storeId: store.id,
+      storeName: store.name,
+      branch: store.branch,
+      ...details,
+    },
+  });
+}
 
 function publicStock(store, variant, stock) {
   return {
@@ -177,6 +214,9 @@ async function getVisitStoreStock(req, res) {
     where: { id: storeId, ...(assignedId === null ? {} : { branchId: assignedId }) },
   });
   if (!store) return res.status(404).json({ error: "Toko tidak ditemukan." });
+  if (!await hasAssignedZoneAccess(req, storeId)) {
+    return res.status(403).json({ error: "Toko ini berada di luar zona yang ditugaskan kepada Anda. Hubungi admin jika penugasan perlu diperbarui." });
+  }
 
   const [variants, stocks, products] = await Promise.all([
     Variant.findAll({
@@ -236,6 +276,7 @@ async function adjustStoreStock(req, res) {
       }),
     ]);
     if (!store || !variant) return null;
+    if (!await hasAssignedZoneAccess(req, storeId, transaction)) return { outsideAssignedZone: true };
     if (store.branchId && variant.branchId && store.branchId !== variant.branchId) {
       return { variantBranchMismatch: true };
     }
@@ -265,6 +306,7 @@ async function adjustStoreStock(req, res) {
   });
 
   if (!result) return res.status(404).json({ error: "Toko atau varian tidak ditemukan." });
+  if (result.outsideAssignedZone) return res.status(403).json({ error: "Toko ini berada di luar zona yang ditugaskan kepada Anda. Hubungi admin jika penugasan perlu diperbarui." });
   if (result.variantBranchMismatch) return res.status(400).json({ error: "Varian bukan milik cabang toko ini." });
   if (result.insufficient) return res.status(400).json({ error: "Jumlah pengurangan melebihi stok yang tersedia." });
   if (result.overflow) return res.status(400).json({ error: "Jumlah stok melebihi batas maksimum." });
@@ -286,6 +328,13 @@ async function adjustStoreStock(req, res) {
       totalStock: result.stock.totalStock,
       updatedBy: req.user.username,
     },
+  });
+  await logStoreItemUpdate(req, result.store, {
+    changeType: "stock_adjustment",
+    variantId: result.variant.id,
+    variantName: result.variant.name,
+    direction,
+    quantity,
   });
   const updatedStock = await StoreStock.findByPk(result.stock.id, {
     include: [{ model: User, as: "updater", attributes: ["id", "username"] }],
@@ -320,6 +369,7 @@ async function receiveStoreStock(req, res) {
       lock: transaction.LOCK.UPDATE,
     });
     if (!store) return { notFound: true };
+    if (!await hasAssignedZoneAccess(req, storeId, transaction)) return { outsideAssignedZone: true };
     const variants = await Variant.findAll({
       where: {
         id: [...seenVariants],
@@ -378,6 +428,7 @@ async function receiveStoreStock(req, res) {
   });
 
   if (result.notFound) return res.status(404).json({ error: "Toko tidak ditemukan." });
+  if (result.outsideAssignedZone) return res.status(403).json({ error: "Toko ini berada di luar zona yang ditugaskan kepada Anda. Hubungi admin jika penugasan perlu diperbarui." });
   if (result.variantNotFound) return res.status(404).json({ error: "Varian tidak ditemukan." });
   if (result.variantBranchMismatch) {
     return res.status(400).json({ error: `Varian ${result.variantName} bukan milik cabang toko ini.` });
@@ -406,6 +457,12 @@ async function receiveStoreStock(req, res) {
         totalStock: entry.stock.totalStock,
         updatedBy: req.user.username,
       },
+    });
+    await logStoreItemUpdate(req, entry.store, {
+      changeType: "stock_received",
+      variantId: entry.variant.id,
+      variantName: entry.variant.name,
+      quantity: entry.quantity,
     });
   }
   const stocks = await Promise.all(result.updated.map(async (entry) => {
@@ -542,6 +599,10 @@ async function receiveVisitProducts(req, res) {
       },
     });
   }
+  await logStoreItemUpdate(req, result.store, {
+    changeType: "products_received",
+    quantity: result.products.length,
+  });
   res.json({ products: result.products.map(publicVisitProduct) });
 }
 
@@ -562,6 +623,7 @@ async function updateVisitProductStatus(req, res) {
       lock: transaction.LOCK.UPDATE,
     });
     if (!store) return { storeNotFound: true };
+    if (!await hasAssignedZoneAccess(req, storeId, transaction)) return { outsideAssignedZone: true };
     const product = await Product.findOne({
       where: {
         barcode,
@@ -597,6 +659,7 @@ async function updateVisitProductStatus(req, res) {
   });
 
   if (result.storeNotFound) return res.status(404).json({ error: "Toko tidak ditemukan." });
+  if (result.outsideAssignedZone) return res.status(403).json({ error: "Toko ini berada di luar zona yang ditugaskan kepada Anda. Hubungi admin jika penugasan perlu diperbarui." });
   if (result.productNotFound) return res.status(404).json({ error: "Produk berstatus Di Toko tidak ditemukan pada toko ini atau tercatat di toko lain." });
   if (result.withoutVariant) return res.status(400).json({ error: "Varian produk belum terhubung, sehingga stok toko tidak dapat dikurangi." });
   if (result.outsideStoreBranch) return res.status(400).json({ error: "Produk berasal dari cabang yang berbeda dengan toko ini." });
@@ -617,6 +680,12 @@ async function updateVisitProductStatus(req, res) {
       storeName: result.store.name,
       branch: result.store.branch,
     },
+  });
+  await logStoreItemUpdate(req, result.store, {
+    changeType: "product_status",
+    barcode: result.product.barcode,
+    fromStatus: "di_toko",
+    toStatus,
   });
   await logActivity(req, {
     action: "update",
